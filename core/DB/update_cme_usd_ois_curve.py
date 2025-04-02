@@ -1,4 +1,5 @@
 import sys
+
 sys.path.append("../../")
 
 import os
@@ -9,7 +10,7 @@ from datetime import datetime
 import pandas as pd
 import pytz
 import schedule
-from sqlalchemy import Column, String, create_engine, text
+from sqlalchemy import Column, String, create_engine, text, inspect, Engine
 from sqlalchemy.dialects.postgresql import HSTORE
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -36,7 +37,7 @@ db_username = "postgres"
 db_password = "password"
 db_host = "localhost"
 db_port = "5432"
-db_name = "usd_ois_cme_eris_curve_temptemptemp"
+db_name = "usd_ois_cme_eris_curve"
 connection_string = f"postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}"
 engine = create_engine(connection_string)
 
@@ -46,12 +47,15 @@ chi_now = datetime.now(tz=pytz.timezone("US/Central"))
 chi_today = datetime(year=chi_now.year, month=chi_now.month, day=chi_now.day)
 
 USD_OIS_CURVE = "USD-SOFR-1D"
+INTERPOLATION_ALGO = "log_linear"
+
 usd_swaps = Swaps(
     data_source="CME",
     curve=USD_OIS_CURVE,
-    ql_interpolation_algo="log_linear",
+    ql_interpolation_algo=INTERPOLATION_ALGO,
     show_tqdm=True,
     error_verbose=True,
+    max_njobs=-1,
 )
 
 par_tenors_to_fetch = [
@@ -148,6 +152,51 @@ def update_csv_and_get_df():
         sys.exit(1)
 
 
+def update_discount_curve_hstore(usd_swaps: Swaps, chi_today: datetime, engine: Engine):
+    try:
+        ql_curve_cache_pickable = {
+            ts.isoformat(): _get_nodes_dict(ql_curve) for ts, ql_curve in usd_swaps._ql_curve_cache.items() if ts.date() != chi_today.date()
+        }  # dont cache intraday snap
+
+        def convert_dict_for_hstore(ql_curve_cache_pickable):
+            converted = {}
+            for ts, nodes in ql_curve_cache_pickable.items():
+                converted_nodes = {node.isoformat(): str(val) for node, val in nodes.items()}
+                converted[ts] = converted_nodes
+            return converted
+
+        hstore_ready_data = convert_dict_for_hstore(ql_curve_cache_pickable)
+
+        Base = declarative_base()
+
+        class QLCurveCache(Base):
+            __tablename__ = f"USD-SOFR-1D_{INTERPOLATION_ALGO}_ql_cache_nodes"
+            timestamp = Column(String, primary_key=True)
+            nodes = Column(HSTORE)
+
+        inspector = inspect(engine)
+        if not inspector.has_table(QLCurveCache.__tablename__):
+            Base.metadata.create_all(engine)
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        for ts, nodes in hstore_ready_data.items():
+            record = QLCurveCache(timestamp=ts, nodes=nodes)
+            session.merge(record)  # merge handles insert or update
+        session.commit()
+        session.close()
+
+        print(
+            termcolor.colored(
+                f"Postgres: Discount curve cache table updated successfully in table '{QLCurveCache.__tablename__}'",
+                color="green",
+            )
+        )
+    except Exception as e:
+        print(termcolor.colored(f"Postgres: Error updating discount curve cache table '{QLCurveCache.__tablename__}': {e}", color="red"))
+
+
 def run_update_postgres():
     try:
         alchemy_swaps_wrapper = AlchemyQLBootstrapperWrapper(engine=engine)
@@ -174,38 +223,7 @@ def run_update_postgres():
     except Exception as e:
         print(termcolor.colored(f"Postgres: Error updating table '{USD_OIS_CURVE}': {e}", color="red"))
 
-    try:
-        ql_curve_cache_pickable = {
-            ts.isoformat(): _get_nodes_dict(ql_curve) for ts, ql_curve in usd_swaps._ql_curve_cache.items() if ts.date() != chi_today.date()
-        }  # dont cache intraday snap
-
-        def convert_dict_for_hstore(ql_curve_cache_pickable):
-            converted = {}
-            for ts, nodes in ql_curve_cache_pickable.items():
-                converted_nodes = {node.isoformat(): str(val) for node, val in nodes.items()}
-                converted[ts] = converted_nodes
-            return converted
-
-        hstore_ready_data = convert_dict_for_hstore(ql_curve_cache_pickable)
-
-        Base = declarative_base()
-
-        class QLCurveCache(Base):
-            __tablename__ = "USD-SOFR-1D_log_linear_ql_cache_nodes"
-            timestamp = Column(String, primary_key=True)
-            nodes = Column(HSTORE)
-
-        Session = sessionmaker(bind=engine)
-        session = Session()
-
-        for ts, nodes in hstore_ready_data.items():
-            record = QLCurveCache(timestamp=ts, nodes=nodes)
-            session.merge(record)  # merge handles insert or update
-        session.commit()
-        session.close()
-
-    except Exception as e:
-        print(termcolor.colored(f"Postgres: Error updating discount curve cache table 'USD-SOFR-1D_log_linear_ql_cache_nodes: {e}", color="red"))
+    update_discount_curve_hstore(usd_swaps=usd_swaps, chi_today=chi_today, engine=engine)
 
 
 if __name__ == "__main__":
@@ -225,6 +243,28 @@ if __name__ == "__main__":
                 print(f"CSV data successfully imported into PostgreSQL table '{USD_OIS_CURVE}'.")
             except SQLAlchemyError as e:
                 print(f"Error occurred during DB init: {e}")
+
+            new_usd_swaps = Swaps(
+                data_source=engine,
+                curve=USD_OIS_CURVE,
+                ql_interpolation_algo="log_linear",
+                show_tqdm=True,
+                error_verbose=True,
+                max_njobs=-1,
+            )
+            new_usd_swaps.swaps_timeseries_builder(
+                start_date=datetime(2005, 11, 1),
+                end_date=chi_today,
+                cols=par_tenors_to_fetch,
+                n_jobs=-1,
+            )
+
+            with engine.connect() as connection:
+                connection.execute(text("CREATE EXTENSION IF NOT EXISTS hstore;"))
+                connection.commit()  
+                print("hstore extension initialized successfully.")
+
+            update_discount_curve_hstore(usd_swaps=new_usd_swaps, chi_today=chi_today, engine=engine)
 
     elif mode == "update_postgres":
         run_update_postgres()
