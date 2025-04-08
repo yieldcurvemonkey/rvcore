@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Literal, Optional, Callable
+from typing import List, Literal, Optional, Callable, Dict
 
 import numpy as np
 import pandas as pd
@@ -451,121 +451,31 @@ def build_piecewise_curve_from_discount_factor_scipy_spline(
     return curve
 
 
-# TODO: make curve params more structured
+def extract_fitted_curve_nodes(fitted_curve: ql.YieldTermStructure, num_points: Optional[int] = 250) -> Dict[datetime, float]:
+    start_date = fitted_curve.referenceDate()
+    end_date = fitted_curve.maxDate()
+    dt_start = start_date.serialNumber()
+    dt_end = end_date.serialNumber()
+    grid_serials = np.linspace(dt_start, dt_end, num_points).astype(int)
+    grid_dates = [ql.Date(int(s)) for s in grid_serials]
+    return {ql_date_to_datetime(date): fitted_curve.discount(date) for date in grid_dates}
 
 
-def get_ql_swaps_curve_params(
-    curve_str: Literal[
-        "USD-SOFR-1D",
-        "USD-FEDFUNDS",
-        "USD-OIS",
-        "JPY-TONAR",
-        "CAD-CORRA",
-        "EUR-ESTR",
-        "EUR-EURIBOR-1M",
-        "EUR-EURIBOR-3M",
-        "EUR-EURIBOR-6M",
-        "GBP-SONIA",
-        # Additional curves could be added here.
-        "CHF-SARON-1D",
-        "NOK-NIBOR-6M",
-        "HKD-HIBOR-3M",
-        "AUD-AONIA",
-        "SGD-SORA-1D",
-    ],
-):
-    """
-    QL_CURVE_PARAMS returns a tuple:
-      IndexClass,         -> e.g. ql.Sofr, ql.FedFunds, etc.
-      is_ois,             -> True for overnight indexed swaps, False for Ibor-based indices.
-      DayCounter,         -> e.g. ql.Actual360()
-      Calendar,           -> e.g. ql.UnitedStates(ql.UnitedStates.SOFR)
-      BusinessDayConvention, -> e.g. ql.ModifiedFollowing
-      Frequency,          -> e.g. ql.Annual for OIS, or Monthly/Quarterly/Semiannual for Ibor indices.
-      IndexTenor,         -> a QuantLib Period representing the index tenor (e.g. ql.Period("1D") for OIS, ql.Period("1M") for Euribor1M)
-      Currency            -> a QuantLib currency object.
-    """
-    QL_SWAP_CURVE_PARAMS = {
-        "USD-SOFR-1D": (ql.Sofr, True, ql.Actual360(), ql.UnitedStates(ql.UnitedStates.SOFR), ql.ModifiedFollowing, ql.Annual, ql.Period("1D"), ql.USDCurrency()),
-        "USD-FEDFUNDS": (
-            ql.FedFunds,
-            True,
-            ql.Actual360(),
-            ql.UnitedStates(ql.UnitedStates.FederalReserve),
-            ql.ModifiedFollowing,
-            ql.Annual,
-            ql.Period("1D"),
-            ql.USDCurrency(),
-        ),
-        "USD-OIS": (
-            ql.FedFunds,
-            True,
-            ql.Actual360(),
-            ql.UnitedStates(ql.UnitedStates.FederalReserve),
-            ql.ModifiedFollowing,
-            ql.Annual,
-            ql.Period("1D"),
-            ql.USDCurrency(),
-        ),
-        "CAD-CORRA": (ql.Corra, True, ql.Actual365Fixed(), ql.Canada(ql.Canada.TSX), ql.ModifiedFollowing, ql.Annual, ql.Period("1D"), ql.CADCurrency()),
-        "GBP-SONIA": (
-            ql.Sonia,
-            True,
-            ql.Actual365Fixed(),
-            ql.UnitedKingdom(ql.UnitedKingdom.Settlement),
-            ql.ModifiedFollowing,
-            ql.Annual,
-            ql.Period("1D"),
-            ql.GBPCurrency(),
-        ),
-        "EUR-ESTR": (ql.Estr, True, ql.Actual360(), ql.TARGET(), ql.ModifiedFollowing, ql.Annual, ql.Period("1D"), ql.EURCurrency()),
-        "EUR-EURIBOR-1M": (
-            ql.Euribor1M,
-            False,
-            ql.Thirty360(ql.Thirty360.European),
-            ql.TARGET(),
-            ql.ModifiedFollowing,
-            ql.Monthly,
-            ql.Period("1M"),
-            ql.EURCurrency(),
-        ),
-        "EUR-EURIBOR-3M": (
-            ql.Euribor3M,
-            False,
-            ql.Thirty360(ql.Thirty360.European),
-            ql.TARGET(),
-            ql.ModifiedFollowing,
-            ql.Quarterly,
-            ql.Period("3M"),
-            ql.EURCurrency(),
-        ),
-        "EUR-EURIBOR-6M": (
-            ql.Euribor6M,
-            False,
-            ql.Thirty360(ql.Thirty360.European),
-            ql.TARGET(),
-            ql.ModifiedFollowing,
-            ql.Semiannual,
-            ql.Period("6M"),
-            ql.EURCurrency(),
-        ),
-        "JPY-TONAR": (ql.Tona, True, ql.Actual365Fixed(), ql.Japan(), ql.ModifiedFollowing, ql.Annual, ql.Period("1D"), ql.JPYCurrency()),
-    }
+def get_nodes_dict(
+    ql_curve: ql.YieldTermStructure | ql.DiscountCurve | ql.PiecewiseLogLinearDiscount | ql.FittedBondDiscountCurve, to_ttm: Optional[bool] = False
+) -> Dict[datetime, float]:
+    if hasattr(ql_curve, "nodes"):
+        nodes = ql_curve.nodes()
+    elif hasattr(ql_curve, "dates") and hasattr(ql_curve, "discounts"):
+        nodes = list(zip(ql_curve.dates(), ql_curve.discounts()))
+    else:
+        return extract_fitted_curve_nodes(fitted_curve=ql_curve)
 
-    return QL_SWAP_CURVE_PARAMS[curve_str]
+    if to_ttm:
+        ref_date: ql.Date = ql_curve.referenceDate()
+        day_counter: ql.DayCounter = ql_curve.dayCounter()
+        nodes_dict = {day_counter.yearFraction(ref_date, node[0]): node[1] for node in nodes}
+    else:
+        nodes_dict = {ql_date_to_datetime(node[0]): node[1] for node in nodes}
 
-
-def get_ql_cash_curve_params(curve_str: Literal["USD"]):
-    QL_CASH_CURVE_PARAMS = {
-        "USD": (
-            ql.UnitedStates(ql.UnitedStates.GovernmentBond),
-            1,
-            ql.Semiannual,
-            ql.ActualActual(ql.ActualActual.Actual365),
-            ql.ModifiedFollowing,
-            100,
-            ["CB12", "CT2", "CT3", "CT5", "CT7", "CT10", "CT20", "CT30"],
-        )
-    }
-
-    return QL_CASH_CURVE_PARAMS[curve_str]
+    return nodes_dict

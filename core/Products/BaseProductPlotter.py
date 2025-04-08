@@ -378,11 +378,14 @@ class BaseProductPlotter:
 
             labs = [l.get_label() for l in lns]
             ax_left.legend(lns, labs, loc=(0, 0))
-            plt.title(
-                custom_title or f"{' '.join(cols_to_plot)} (lhs) & {' '.join(cols_to_plot_raxis)} (rhs) Timeseries"
-                if cols_to_plot_raxis
-                else f"{' '.join(cols_to_plot)} Timeseries"
-            )
+            if custom_title:
+                plt.title(custom_title)
+            else:
+                plt.title(
+                    f"{' '.join(cols_to_plot)} (lhs) & {' '.join(cols_to_plot_raxis)} (rhs) Timeseries"
+                    if cols_to_plot_raxis
+                    else f"{' '.join(cols_to_plot)} Timeseries"
+                )
             ax_left.grid(True)
             plt.xticks(rotation=25)
             fig.tight_layout()

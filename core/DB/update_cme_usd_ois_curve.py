@@ -2,24 +2,22 @@ import sys
 
 sys.path.append("../../")
 
-import os
-import sys
 import time
 from datetime import datetime
 
 import pandas as pd
 import pytz
 import schedule
-from sqlalchemy import Column, String, create_engine, text, inspect, Engine
-from sqlalchemy.dialects.postgresql import HSTORE
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy_utils import create_database, database_exists
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy_utils import create_database, database_exists, drop_database
 from termcolor import termcolor
 
-from core.Products.CurveBuilding.AlchemyQLBootstrapperWrapper import AlchemyQLBootstrapperWrapper
-from core.Products.CurveBuilding.QLBootstrapper import _get_nodes_dict
-from core.Products.Swaps import Swaps
+from backend.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
+from backend.Products.CurveBuilding.ql_curve_building_utils import get_nodes_dict
+from backend.Products.CurveBuilding.Swaps.swap_data_models import Base, get_ql_curve_cache_model
+from backend.Products.Swaps import Swaps
 
 if len(sys.argv) < 2:
     print("Usage: python update_cme_usd_ois_curve.py [init_postgres|update_postgres|update_csv|start_update_postgres_service]")
@@ -30,8 +28,7 @@ if mode not in ["init_postgres", "update_postgres", "update_csv", "start_update_
     print("Invalid mode. Use 'init_postgres', 'update_postgres', 'update_csv', or 'start_update_postgres_service'.")
     sys.exit(1)
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-USD_OIS_CSV_PATH = rf"{os.path.dirname(os.getcwd())}/db/hist_usd_ois_cme_eris_curve.csv"
+USD_OIS_CSV_PATH = r"/dump/hist_usd_ois_cme_eris_curve.csv"
 
 db_username = "postgres"
 db_password = "password"
@@ -155,7 +152,7 @@ def update_csv_and_get_df():
 def update_discount_curve_hstore(usd_swaps: Swaps, chi_today: datetime, engine: Engine):
     try:
         ql_curve_cache_pickable = {
-            ts.isoformat(): _get_nodes_dict(ql_curve) for ts, ql_curve in usd_swaps._ql_curve_cache.items() if ts.date() != chi_today.date()
+            ts.isoformat(): get_nodes_dict(ql_curve) for ts, ql_curve in usd_swaps._ql_curve_cache.items() if ts.date() != chi_today.date()
         }  # dont cache intraday snap
 
         def convert_dict_for_hstore(ql_curve_cache_pickable):
@@ -167,12 +164,7 @@ def update_discount_curve_hstore(usd_swaps: Swaps, chi_today: datetime, engine: 
 
         hstore_ready_data = convert_dict_for_hstore(ql_curve_cache_pickable)
 
-        Base = declarative_base()
-
-        class QLCurveCache(Base):
-            __tablename__ = f"USD-SOFR-1D_{INTERPOLATION_ALGO}_ql_cache_nodes"
-            timestamp = Column(String, primary_key=True)
-            nodes = Column(HSTORE)
+        QLCurveCache = get_ql_curve_cache_model(curve=usd_swaps._curve, interpolation=usd_swaps._ql_interpolation_algo)
 
         inspector = inspect(engine)
         if not inspector.has_table(QLCurveCache.__tablename__):
@@ -199,7 +191,7 @@ def update_discount_curve_hstore(usd_swaps: Swaps, chi_today: datetime, engine: 
 
 def run_update_postgres():
     try:
-        alchemy_swaps_wrapper = AlchemyQLBootstrapperWrapper(engine=engine)
+        alchemy_swaps_wrapper = AlchemyWrapper(engine=engine)
         curr_db_df = alchemy_swaps_wrapper.fetch_latest_row(table_name=USD_OIS_CURVE)
         curr_date_in_db = curr_db_df.iloc[-1].name
 
@@ -235,6 +227,9 @@ if __name__ == "__main__":
             sys.exit(0)
         else:
             try:
+                if database_exists(engine.url):
+                    print(termcolor.colored(f"Database '{engine.url.database}' exists. Dropping it...", color="yellow"))
+                    drop_database(engine.url)
                 if not database_exists(engine.url):
                     print(termcolor.colored(f"Database '{engine.url.database}' does not exist. Creating it...", color="yellow"))
                     create_database(engine.url)
@@ -261,7 +256,7 @@ if __name__ == "__main__":
 
             with engine.connect() as connection:
                 connection.execute(text("CREATE EXTENSION IF NOT EXISTS hstore;"))
-                connection.commit()  
+                connection.commit()
                 print("hstore extension initialized successfully.")
 
             update_discount_curve_hstore(usd_swaps=new_usd_swaps, chi_today=chi_today, engine=engine)

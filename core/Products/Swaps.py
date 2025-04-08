@@ -10,10 +10,11 @@ from sqlalchemy import Engine
 
 from core.Fetchers.CMEFetcherV2 import CMEFetcherV2
 from core.Fetchers.ErisFuturesFetcher import ErisFuturesFetcher
-from core.Products.CurveBuilding.AlchemyQLBootstrapperWrapper import AlchemyQLBootstrapperWrapper
 from core.Products.BaseProductPlotter import BaseProductPlotter
-from core.Products.CurveBuilding.QLBootstrapper import QLBootstrapper
-from core.Products.CurveBuilding.ql_curve_building import build_ql_discount_curve, get_ql_swaps_curve_params
+from core.Products.CurveBuilding.Swaps.AlchemySwapCurveBootstrapperWrapper import AlchemySwapCurveBootstrapperWrapper 
+from core.Products.CurveBuilding.Swaps.SwapCurveBootstrapper import SwapCurveBootstrapper 
+from core.Products.CurveBuilding.ql_curve_building_utils import build_ql_discount_curve
+from core.Products.CurveBuilding.ql_curve_params import CME_SWAP_CURVE_QL_PARAMS
 from core.utils.ql_utils import datetime_to_ql_date, get_bdates_between, most_recent_business_day_ql, ql_date_to_datetime, ql_period_to_months
 
 
@@ -21,7 +22,7 @@ class Swaps(BaseProductPlotter):
     _data_source: Literal["CME", "JPM", "SKY", "CSV_{path}"] = None
     _curve: str = None
 
-    _swaps_hist_data_fetcher: CMEFetcherV2 | ErisFuturesFetcher | QLBootstrapper | AlchemyQLBootstrapperWrapper = None
+    _swaps_hist_data_fetcher: CMEFetcherV2 | ErisFuturesFetcher | SwapCurveBootstrapper | AlchemySwapCurveBootstrapperWrapper = None
     _swaps_hist_timeseries_csv_df: pd.DataFrame = None
     _swaps_db_engine: Engine = None
 
@@ -160,10 +161,9 @@ class Swaps(BaseProductPlotter):
                 self._data_source = data_source
 
         self._curve = curve
-        curve_params = get_ql_swaps_curve_params(self._curve)
-        self._ql_day_count = curve_params[2]
-        self._ql_calendar = curve_params[3]
-        self._ql_bday_convention = curve_params[4]
+        self._ql_day_count = CME_SWAP_CURVE_QL_PARAMS[self._curve]["dayCounter"]
+        self._ql_calendar = CME_SWAP_CURVE_QL_PARAMS[self._curve]["calendar"]
+        self._ql_bday_convention = CME_SWAP_CURVE_QL_PARAMS[self._curve]["businessConvention"]
         self._ql_interpolation_algo = ql_interpolation_algo
 
         self._bootstrap_cols = bootstrap_cols
@@ -229,12 +229,11 @@ class Swaps(BaseProductPlotter):
                     ),
                 },
                 "CSV": {
-                    "obj": QLBootstrapper,
+                    "obj": SwapCurveBootstrapper,
                     "init_args": (
-                        self._swaps_hist_timeseries_csv_df,
-                        None,
+                        self._swaps_hist_timeseries_csv_df
                     ),
-                    "fetch_func": "parallel_swap_curve_bootstrapper",
+                    "fetch_func": "parallel_ql_swap_curve_bootstrapper",
                     "fetch_func_args": (
                         self._curve,
                         None,
@@ -248,8 +247,8 @@ class Swaps(BaseProductPlotter):
                     ),
                 },
                 "ENGINE": {
-                    "obj": AlchemyQLBootstrapperWrapper,
-                    "init_args": (self._swaps_db_engine, self._date_col, None, self._bootstrap_cols),
+                    "obj": AlchemySwapCurveBootstrapperWrapper,
+                    "init_args": (self._swaps_db_engine, self._date_col, None, self._bootstrap_cols, "%Y-%m-%d %H:%M:%S%z"),
                     "fetch_func": "ql_swap_curve_bootstrap_wrapper",
                     "fetch_func_args": (
                         self._curve,
@@ -257,11 +256,11 @@ class Swaps(BaseProductPlotter):
                         None,
                         self._SWAP_CURVE_FETCH_FUNC_INPUT_DATES,
                         self._ql_interpolation_algo,
-                        True,
+                        True,  # extrapolation
                         self._show_tqdm,
                         self._SWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE,
                         self._SWAP_CURVE_BOOTSTRAPPER_NJOBS,
-                        True,
+                        True,  # utc
                     ),
                 },
                 "JPM": None,
@@ -610,37 +609,57 @@ def _process_curve_item(
     ql.Settings.instance().evaluationDate = datetime_to_ql_date(curr_date)
 
     row = {date_col: curr_date}
-    ql_floating_index_obj, is_ois, ql_dc, ql_cal = get_ql_swaps_curve_params(curve)[:4]
+    # ql_floating_index_obj, is_ois, ql_dc, ql_cal = get_ql_swaps_curve_params(curve)[:4]
     ql_curve = build_ql_discount_curve(
         datetime_series=pd.Series(ql_curve_nodes.keys()),
         discount_factor_series=pd.Series(ql_curve_nodes.values()),
-        ql_dc=ql_dc,
-        ql_cal=ql_cal,
+        ql_dc=CME_SWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
+        ql_cal=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
         interpolation_algo=f"df_{ql_interpolation_algo_str}",
     )
     ql_curve.enableExtrapolation()
 
     curr_ql_yts = ql.YieldTermStructureHandle(ql_curve)
     curr_ql_swap_engine = ql.DiscountingSwapEngine(curr_ql_yts)
-    curr_ql_floating_index = ql_floating_index_obj(curr_ql_yts)
+    curr_ql_floating_index = CME_SWAP_CURVE_QL_PARAMS[curve]["swapIndex"](curr_ql_yts)
 
     for fwd_tenor_str in fwd_tenors:
         for underlying_tenor_str in underlying_tenors:
             try:
-                if is_ois:
+                if CME_SWAP_CURVE_QL_PARAMS[curve]["is_ois"]:
                     swap = ql.MakeOIS(
                         swapTenor=ql.Period(underlying_tenor_str),
                         overnightIndex=curr_ql_floating_index,
-                        fixedRate=0,
+                        fixedRate=-0,
                         fwdStart=ql.Period(fwd_tenor_str),
+                        paymentLag=CME_SWAP_CURVE_QL_PARAMS[curve]["paymentLag"],
+                        settlementDays=CME_SWAP_CURVE_QL_PARAMS[curve]["settlementDays"],
+                        calendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        paymentCalendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        fixedLegDayCount=CME_SWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
+                        fixedLegConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        paymentAdjustmentConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        paymentFrequency=CME_SWAP_CURVE_QL_PARAMS[curve]["frequency"],
+                        discountingTermStructure=curr_ql_yts,
                         pricingEngine=curr_ql_swap_engine,
                     )
                 else:
                     swap = ql.MakeVanillaSwap(
                         swapTenor=ql.Period(underlying_tenor_str),
                         iborIndex=curr_ql_floating_index,
-                        fixedRate=0,
+                        fixedRate=-0,
                         forwardStart=ql.Period(fwd_tenor_str),
+                        fixedLegTenor=CME_SWAP_CURVE_QL_PARAMS[curve]["period"],
+                        fixedLegCalendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        fixedLegConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        fixedLegTerminationDateConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        fixedLegDayCount=CME_SWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
+                        floatingLegTenor=CME_SWAP_CURVE_QL_PARAMS[curve]["period"],
+                        floatingLegCalendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        floatingLegConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        floatingLegTerminationDateConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        floatingLegDayCount=curr_ql_floating_index.dayCounter(),
+                        discountingTermStructure=curr_ql_yts,
                         pricingEngine=curr_ql_swap_engine,
                     )
                 par_rate = swap.fairRate() * 100
@@ -653,13 +672,22 @@ def _process_curve_item(
     if matched_maturities and default_mss_prefix:
         for matched_maturity in matched_maturities:
             try:
-                if is_ois:
+                if CME_SWAP_CURVE_QL_PARAMS[curve]["is_ois"]:
                     swap = ql.MakeOIS(
                         swapTenor=ql.Period("-0D"),
                         fixedRate=-0,
                         overnightIndex=curr_ql_floating_index,
                         effectiveDate=datetime_to_ql_date(curr_date),
                         terminationDate=datetime_to_ql_date(matched_maturity),
+                        paymentLag=CME_SWAP_CURVE_QL_PARAMS[curve]["paymentLag"],
+                        settlementDays=CME_SWAP_CURVE_QL_PARAMS[curve]["settlementDays"],
+                        calendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        paymentCalendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        fixedLegDayCount=CME_SWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
+                        fixedLegConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        paymentAdjustmentConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        paymentFrequency=CME_SWAP_CURVE_QL_PARAMS[curve]["frequency"],
+                        discountingTermStructure=curr_ql_yts,
                         pricingEngine=curr_ql_swap_engine,
                     )
                 else:
@@ -669,6 +697,17 @@ def _process_curve_item(
                         iborIndex=curr_ql_floating_index,
                         effectiveDate=datetime_to_ql_date(curr_date),
                         terminationDate=datetime_to_ql_date(matched_maturity),
+                        fixedLegTenor=CME_SWAP_CURVE_QL_PARAMS[curve]["period"],
+                        fixedLegCalendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        fixedLegConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        fixedLegTerminationDateConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        fixedLegDayCount=CME_SWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
+                        floatingLegTenor=CME_SWAP_CURVE_QL_PARAMS[curve]["period"],
+                        floatingLegCalendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                        floatingLegConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        floatingLegTerminationDateConvention=CME_SWAP_CURVE_QL_PARAMS[curve]["businessConvention"],
+                        floatingLegDayCount=curr_ql_floating_index.dayCounter(),
+                        discountingTermStructure=curr_ql_yts,
                         pricingEngine=curr_ql_swap_engine,
                     )
                 par_rate = swap.fairRate() * 100
