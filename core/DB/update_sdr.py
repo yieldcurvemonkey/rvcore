@@ -17,8 +17,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy_utils import create_database, database_exists, drop_database
 
-from backend.Fetchers.DTCCFetcher import DTCCFetcher, datetime_today_utc
-from backend.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
+from core.Fetchers.DTCCFetcher import DTCCFetcher, datetime_today_utc
+from core.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
 
 if len(sys.argv) < 2:
     print("Usage: python update_sdr.py [init_postgres|update_postgres|start_update_postgres_service]")

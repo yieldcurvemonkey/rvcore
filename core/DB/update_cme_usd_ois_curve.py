@@ -14,10 +14,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy_utils import create_database, database_exists, drop_database
 from termcolor import termcolor
 
-from backend.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
-from backend.Products.CurveBuilding.ql_curve_building_utils import get_nodes_dict
-from backend.Products.CurveBuilding.Swaps.swap_data_models import Base, get_ql_curve_cache_model
-from backend.Products.Swaps import Swaps
+from core.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
+from core.Products.CurveBuilding.ql_curve_building_utils import get_nodes_dict
+from core.Products.CurveBuilding.Swaps.swap_data_models import Base, get_ql_curve_cache_model
+from core.Products.Swaps import Swaps
 
 if len(sys.argv) < 2:
     print("Usage: python update_cme_usd_ois_curve.py [init_postgres|update_postgres|update_csv|start_update_postgres_service]")
@@ -34,7 +34,7 @@ db_username = "postgres"
 db_password = "password"
 db_host = "localhost"
 db_port = "5432"
-db_name = "usd_ois_cme_eris_curve"
+db_name = "rvcore_usd_ois_cme_eris_curve"
 connection_string = f"postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}"
 engine = create_engine(connection_string)
 

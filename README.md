@@ -26,7 +26,7 @@ pip install -r requirements.txt
 cd .\backend\DB\
 ```
 
-- **Script will drop `db name=usd_ois_cme_eris_curve` if it already exists**
+- **Script will drop `db name=rvcore_usd_ois_cme_eris_curve` if it already exists**
 
 ```py
 python .\update_cme_usd_ois_curve.py init_postgres
@@ -58,6 +58,8 @@ python .\update_cme_usd_ois_curve.py start_update_postgres_service
 cd .\backend\DB\
 ```
 
+- **Script will drop `db name=rvcore_fedinvest_cusip_set` if it already exists**
+
 ```py
 python .\update_fedinvest_ust_csv.py init_postgres
 ```
@@ -79,7 +81,7 @@ python .\update_fedinvest_ust_csv.py start_update_postgres_service
 
 ---
 
-### USD Swaptions PostgresDB
+### Init USD Swaptions PostgresDB
 
 - Built from JPM Analytics Packages
 - SOFR OIS (BBG ICVS 490 curve) NY Close
@@ -91,6 +93,7 @@ python .\update_fedinvest_ust_csv.py start_update_postgres_service
 cd .\backend\DB\
 ```
 
+- **Script will drop `db name=rvcore_github_jpm_usd_swaptions_cube` if it already exists**
 
 ```py
 python .\update_github_vol_cube.py init_postgres
@@ -112,6 +115,8 @@ python .\update_github_vol_cube.py update_postgres
 ```bash
 cd .\backend\DB\
 ```
+
+- - **Script will drop `db name=rvcore_sdr` if it already exists**
 
 ```py
 python .\update_sdr.py init_postgres

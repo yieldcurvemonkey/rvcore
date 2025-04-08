@@ -13,9 +13,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy_utils import create_database, database_exists
 
 sys.path.insert(0, "../")
-from Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper 
-from DB.FedInvestDataBuilder import FedInvestDataBuilder
-from utils.ql_utils import most_recent_business_day_from_date, datetime_to_ql_date, ql_date_to_datetime
+from core.DB.FedInvestDataBuilder import FedInvestDataBuilder
+from core.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
+from core.utils.ql_utils import datetime_to_ql_date, most_recent_business_day_from_date, ql_date_to_datetime
 
 if len(sys.argv) < 2:
     print("Usage: python update_fedinvest_ust_csv.py [init_postgres|update_postgres|update_csv|start_update_postgres_service]")

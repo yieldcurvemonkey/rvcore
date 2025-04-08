@@ -11,10 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy_utils import create_database, database_exists, drop_database
 from termcolor import termcolor
 
-from backend.Products.CurveBuilding.Swaptions.types import SCube, SABRParams
-from backend.Products.CurveBuilding.Swaptions.swaption_data_models import Base, get_scube_cache_model, get_sabr_params_cache_model
-from backend.Products.Swaps import Swaps
-from backend.Products.Swaptions import Swaptions
+from core.Products.CurveBuilding.Swaptions.types import SCube, SABRParams
+from core.Products.CurveBuilding.Swaptions.swaption_data_models import Base, get_scube_cache_model, get_sabr_params_cache_model
+from core.Products.Swaps import Swaps
+from core.Products.Swaptions import Swaptions
 
 if len(sys.argv) < 2:
     print("Usage: python update_github_vol_cube.py [init_postgres|update_postgres]")
