@@ -2,6 +2,7 @@ import sys
 
 sys.path.append("../../")
 
+import os
 import time
 from datetime import datetime
 
@@ -28,7 +29,8 @@ if mode not in ["init_postgres", "update_postgres", "update_csv", "start_update_
     print("Invalid mode. Use 'init_postgres', 'update_postgres', 'update_csv', or 'start_update_postgres_service'.")
     sys.exit(1)
 
-USD_OIS_CSV_PATH = r"/dump/hist_usd_ois_cme_eris_curve.csv"
+dir_path = os.path.dirname(os.path.realpath(__file__))
+USD_OIS_CSV_PATH = rf"{dir_path}/dump/hist_usd_ois_cme_eris_curve.csv"
 
 db_username = "postgres"
 db_password = "password"
@@ -248,7 +250,7 @@ if __name__ == "__main__":
                 max_njobs=-1,
             )
             new_usd_swaps.swaps_timeseries_builder(
-                start_date=datetime(2005, 11, 1),
+                start_date=datetime(2020, 1, 1),
                 end_date=chi_today,
                 cols=par_tenors_to_fetch,
                 n_jobs=-1,

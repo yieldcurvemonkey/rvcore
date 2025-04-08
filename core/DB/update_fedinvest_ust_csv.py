@@ -1,5 +1,8 @@
-import os
 import sys
+
+sys.path.append("../../")
+
+import os
 import time
 from datetime import datetime
 from typing import List, Set, Tuple
@@ -12,7 +15,6 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy_utils import create_database, database_exists
 
-sys.path.insert(0, "../")
 from core.DB.FedInvestDataBuilder import FedInvestDataBuilder
 from core.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
 from core.utils.ql_utils import datetime_to_ql_date, most_recent_business_day_from_date, ql_date_to_datetime
@@ -34,7 +36,7 @@ db_username = "postgres"
 db_password = "password"
 db_host = "localhost"
 db_port = "5432"
-db_name = "fedinvest_cusip_set"
+db_name = "rvcore_fedinvest_cusip_set"
 table_name = "USD"
 connection_string = f"postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}"
 engine = create_engine(connection_string)
@@ -94,7 +96,7 @@ def update_csv_and_get_df() -> pd.DataFrame:
             curr_df.sort_values("timestamp", inplace=True)
             last_date = curr_df.iloc[-1]["timestamp"]
         else:
-            last_date = datetime(2008, 6, 1)
+            last_date = datetime(2023, 1, 1)
             curr_df = pd.DataFrame()
 
         today = datetime.now()

@@ -18,7 +18,7 @@ from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
 from core.Fetchers.BaseFetcher import BaseFetcher
-from core.Products.CurveBuilding.ql_curve_building import build_ql_discount_curve
+from core.Products.CurveBuilding.ql_curve_building_utils import build_ql_discount_curve
 from core.utils.ql_utils import get_bdates_between
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)

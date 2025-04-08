@@ -2,23 +2,22 @@ import asyncio
 import re
 import sys
 import warnings
-import QuantLib as ql
 from datetime import datetime
 from io import BytesIO
-from typing import Dict, Literal, Optional, Tuple, Union, List
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 import pandas as pd
 import pyarrow
 import pyarrow.csv
-import tqdm.asyncio
-
+import QuantLib as ql
+import tqdm
+from dateutil.relativedelta import relativedelta
 from pandas.errors import DtypeWarning
 from pandas.tseries.offsets import BDay
-from dateutil.relativedelta import relativedelta
 
 from core.Fetchers.BaseFetcher import BaseFetcher
-from core.Products.CurveBuilding.ql_curve_building import build_ql_discount_curve, build_ql_zero_curve
+from core.Products.CurveBuilding.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)

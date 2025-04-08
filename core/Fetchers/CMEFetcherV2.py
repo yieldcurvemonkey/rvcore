@@ -7,12 +7,12 @@ from typing import Dict, List, Literal, Optional
 import pandas as pd
 import pytz
 import QuantLib as ql
-import tqdm.asyncio
+import tqdm
 
 from core.Fetchers.BaseFetcher import BaseFetcher
 from core.Fetchers.CMEFetcher import CMEFetcher
 from core.Fetchers.ErisFuturesFetcher import ErisFuturesFetcher
-from core.Products.CurveBuilding.ql_curve_building import build_ql_discount_curve, build_ql_zero_curve
+from core.Products.CurveBuilding.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
 from core.utils.ql_utils import datetime_to_ql_date, ql_date_to_datetime
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
