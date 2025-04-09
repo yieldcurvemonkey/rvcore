@@ -166,6 +166,7 @@ class FedInvestDataBuilder:
         if end_date.date() == datetime.today().date():
             yday = ql_date_to_datetime(ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(datetime_to_ql_date(datetime.today()), ql.Period("-1D")))
             yday_cusip_set_df = cusip_set_dict_df[yday].copy()
+            assert not yday_cusip_set_df.empty, "yday CUSIPs should not be empty"
 
             cusip_icap_ticker_map = dict(
                 zip(

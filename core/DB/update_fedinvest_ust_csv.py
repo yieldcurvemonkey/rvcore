@@ -13,7 +13,7 @@ import schedule
 import termcolor
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy_utils import create_database, database_exists
+from sqlalchemy_utils import create_database, database_exists, drop_database
 
 from core.DB.FedInvestDataBuilder import FedInvestDataBuilder
 from core.Products.CurveBuilding.AlchemyWrapper import AlchemyWrapper
@@ -48,11 +48,13 @@ ql_calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
 
 def get_date_batches(start_date: datetime, end_date: datetime, batch_days: int = 90) -> List[Tuple[datetime, datetime]]:
     batches = []
-    curr_start = start_date
-    while curr_start < end_date:
+    curr_start = start_date.date()
+    clean_end_date = end_date.date()
+
+    while curr_start < clean_end_date:
         curr_end = curr_start + pd.Timedelta(days=batch_days)
-        if curr_end > end_date:
-            curr_end = end_date
+        if curr_end > clean_end_date:
+            curr_end = clean_end_date
         batches.append((curr_start, curr_end))
         curr_start = curr_end
     return batches
@@ -96,7 +98,7 @@ def update_csv_and_get_df() -> pd.DataFrame:
             curr_df.sort_values("timestamp", inplace=True)
             last_date = curr_df.iloc[-1]["timestamp"]
         else:
-            last_date = datetime(2023, 1, 1)
+            last_date = datetime(2020, 1, 1)
             curr_df = pd.DataFrame()
 
         today = datetime.now()
@@ -156,7 +158,7 @@ def run_update_postgres():
 
             achemy_wrapper = AlchemyWrapper(engine=engine, date_col="timestamp", index_col="hash")
             result_df = achemy_wrapper._fetch_df_by_dates(table_name=table_name, start_date=last_date, end_date=last_date, set_index=False)
-            last_date_to_fetch = ql_date_to_datetime(ql_calendar.advance(datetime_to_ql_date(last_date), ql.Period("-1D")))
+            last_date_to_fetch = ql_date_to_datetime(ql_calendar.advance(datetime_to_ql_date(last_date), ql.Period("-3D")))
         else:
             last_date_to_fetch = datetime(2020, 1, 1)
 
@@ -167,9 +169,9 @@ def run_update_postgres():
         all_data_frames = []
         for batch_start, batch_end in batches:
             if not ql_calendar.isBusinessDay(ql.Date(batch_start.day, batch_start.month, batch_start.year)):
-                batch_start = most_recent_business_day_from_date(batch_start, ql_calendar, tz="America/New_York", to_pydate=True)
+                batch_start = most_recent_business_day_from_date(batch_start, ql_calendar, tz="US/Eastern", to_pydate=True)
             if not ql_calendar.isBusinessDay(ql.Date(batch_end.day, batch_end.month, batch_end.year)):
-                batch_end = most_recent_business_day_from_date(batch_end, ql_calendar, tz="America/New_York", to_pydate=True)
+                batch_end = most_recent_business_day_from_date(batch_end, ql_calendar, tz="US/Eastern", to_pydate=True)
 
             print(termcolor.colored(f"Fetching new data from {batch_start.date()} to {batch_end.date()}", color="blue"))
             new_data_dict = fedinvest_data_builder.fetch_historical_curve_sets(
@@ -245,15 +247,18 @@ if __name__ == "__main__":
             sys.exit(0)
         else:
             try:
+                if database_exists(engine.url):
+                    print(termcolor.colored(f"Database '{engine.url.database}' exists. Dropping it...", color="yellow"))
+                    drop_database(engine.url)
                 if not database_exists(engine.url):
                     print(termcolor.colored(f"Database '{engine.url.database}' does not exist. Creating it...", color="yellow"))
                     create_database(engine.url)
 
                 updated_df.to_sql("USD", engine, if_exists="replace", index=False)
-                print(f"CSV data successfully imported into PostgreSQL table 'fedinvest_cusip_set'.")
+                print(f"CSV data successfully imported into PostgreSQL table '{table_name}'.")
 
                 ct_ts_df.to_sql("USD_otr_timeseries", engine, if_exists="replace", index=False)
-                print(f"CSV data successfully imported into PostgreSQL table 'USD_otr_timeseries'.")
+                print(f"CSV data successfully imported into PostgreSQL table '{table_name}'.")
 
             except SQLAlchemyError as e:
                 print(f"Error occurred during DB init: {e}")
