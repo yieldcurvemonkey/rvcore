@@ -1,4 +1,4 @@
-# `rvcore`: Rates RV Analytics and Pricing Python mSDK
+# `rvcore`: Rates RV Analytics and Pricing Python SDK
 
 ## Getting Started
 
