@@ -23,7 +23,7 @@ pip install -r requirements.txt
     - Intraday marks from the ERIS Discount Curve
 
 ```bash
-cd .\backend\DB\
+cd .\core\DB\
 ```
 
 - **Script will drop `db name=rvcore_usd_ois_cme_eris_curve` if it already exists**
@@ -55,7 +55,7 @@ python .\update_cme_usd_ois_curve.py start_update_postgres_service
 - Intraday data scraped from WSJ (ICAP)
 
 ```bash
-cd .\backend\DB\
+cd .\core\DB\
 ```
 
 - **Script will drop `db name=rvcore_fedinvest_cusip_set` if it already exists**
@@ -90,7 +90,7 @@ python .\update_fedinvest_ust_csv.py start_update_postgres_service
 - Data source: https://github.com/yieldcurvemonkey/MONKEY_CUBE
 
 ```bash
-cd .\backend\DB\
+cd .\core\DB\
 ```
 
 - **Script will drop `db name=rvcore_github_jpm_usd_swaptions_cube` if it already exists**
@@ -113,7 +113,7 @@ python .\update_github_vol_cube.py update_postgres
 - Data only avaliable after UPI migration
 
 ```bash
-cd .\backend\DB\
+cd .\core\DB\
 ```
 
 - - **Script will drop `db name=rvcore_sdr` if it already exists**
