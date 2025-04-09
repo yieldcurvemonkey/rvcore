@@ -49,5 +49,5 @@ coverage.xml
 # Sphinx documentation
 docs/_build/
 
-fedinvest_cusip_set_bigboy.csv
+fedinvest_cusip_set.csv
 temp.ipynb
