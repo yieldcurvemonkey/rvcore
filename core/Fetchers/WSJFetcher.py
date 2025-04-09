@@ -47,7 +47,7 @@ class WSJFetcher(BaseFetcher):
         wsj_ticker_key: str,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-        max_retries: Optional[int] = 3,
+        max_retries: Optional[int] = 5,
         backoff_factor: Optional[int] = 1,
         uid: Optional[str | int] = None,
         intraday_timestamp: Optional[bool] = False,

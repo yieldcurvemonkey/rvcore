@@ -43,7 +43,7 @@ class FedInvestDataFetcher(BaseFetcher):
         date: datetime,
         cusips: List[str],
         uid: Optional[int | str],
-        max_retries: Optional[int] = 3,
+        max_retries: Optional[int] = 5,
         backoff_factor: Optional[int] = 1,
     ):
         payload = {
