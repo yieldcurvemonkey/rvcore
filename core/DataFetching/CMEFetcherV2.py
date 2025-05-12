@@ -1,0 +1,219 @@
+import asyncio
+import sys
+import warnings
+from datetime import datetime
+from typing import Dict, List, Literal, Optional
+
+import pandas as pd
+import pytz
+import QuantLib as ql
+import tqdm.asyncio
+
+from core.DataFetching.BaseFetcher import BaseFetcher
+from core.DataFetching.CMEFetcher import CMEFetcher
+from core.DataFetching.ErisFuturesFetcher import ErisFuturesFetcher
+from core.CurveBuilding.IRSwaps.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
+from core.utils.ql_utils import datetime_to_ql_date, ql_date_to_datetime
+
+warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+import sys
+
+if sys.platform == "win32":
+    loop = asyncio.ProactorEventLoop()
+    asyncio.set_event_loop(loop)
+
+
+class CMEFetcherV2(BaseFetcher):
+    cme_fetcher_v1: CMEFetcher = None
+    eris_fetcher: ErisFuturesFetcher = None
+
+    def __init__(
+        self,
+        global_timeout: int = 10,
+        proxies: Optional[Dict[str, str]] = None,
+        debug_verbose: Optional[bool] = False,
+        info_verbose: Optional[bool] = False,
+        warning_verbose: Optional[bool] = False,
+        error_verbose: Optional[bool] = False,
+    ):
+        super().__init__(
+            global_timeout=global_timeout,
+            proxies=proxies,
+            debug_verbose=debug_verbose,
+            info_verbose=info_verbose,
+            warning_verbose=warning_verbose,
+            error_verbose=error_verbose,
+        )
+        self.cme_fetcher_v1 = CMEFetcher(
+            global_timeout=global_timeout,
+            proxies=proxies,
+            debug_verbose=debug_verbose,
+            info_verbose=info_verbose,
+            warning_verbose=warning_verbose,
+            error_verbose=error_verbose,
+        )
+        self.eris_fetcher = ErisFuturesFetcher(
+            global_timeout=global_timeout,
+            proxies=proxies,
+            debug_verbose=debug_verbose,
+            info_verbose=info_verbose,
+            warning_verbose=warning_verbose,
+            error_verbose=error_verbose,
+        )
+
+    def build_ql_eod_curves(
+        self,
+        curve: Literal[
+            "USD-SOFR-1D",
+            "USD-FEDFUNDS",
+            "USD-OIS",
+            "JPY-TONAR",
+            "CAD-CORRA",
+            "EUR-ESTR",
+            "EUR-EURIBOR-1M",
+            "EUR-EURIBOR-3M",
+            "EUR-EURIBOR-6M",
+            "GBP-SONIA",
+            "CHF-SARON-1D",
+            "NOK-NIBOR-6M",
+            "HKD-HIBOR-3M",
+            "AUD-AONIA",
+            "SGD-SORA-1D",
+        ],
+        type: Literal["Zero", "Df"],
+        ql_day_count: ql.DayCounter,
+        ql_calendar: ql.Calendar,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        bdates: Optional[List[datetime]] = None,
+        interpolation_algo: Optional[
+            List[
+                Literal[
+                    "linear",
+                    "log_linear",
+                    "cubic",
+                    "log_cubic",
+                    "mono_log_cubic",
+                    "natural_cubic",
+                    "kruger_log",
+                    "natural_log_cubic",
+                    "log_mixed_linear",
+                    "log_parabolic_cubic",
+                    "mono_log_parabolic_cubic",
+                    "monotonic_cubic",
+                    "kruger",
+                    "parabolic_cubic",
+                    "monotonic_parabolic_cubic",
+                ]
+            ]
+        ] = "log_linear",
+        enable_extrapolation: Optional[bool] = False,
+        show_tqdm: Optional[bool] = False,
+        max_connections: Optional[int] = 64,
+        max_keepalive_connections: Optional[int] = 5,
+    ) -> Dict[datetime, ql.YieldTermStructure]:
+        assert (start_date and end_date) or bdates, "Must Pass in 'start_date' and 'end_date' or 'bdates'"
+
+        tz_chi = pytz.timezone("US/Central")
+        CME_EOD_REPORT_RELEASE = datetime(
+            year=datetime.today().year, month=datetime.today().month, day=datetime.today().day, hour=16, minute=0, second=0, tzinfo=tz_chi
+        )
+        chi_now = datetime.now(tz=tz_chi)
+
+        if end_date:
+            if end_date.date() < datetime.today().date():
+                cme_end_date = end_date
+            elif end_date.date() == datetime.today().date():
+                if chi_now < CME_EOD_REPORT_RELEASE:
+                    cme_end_date = ql_date_to_datetime(ql_calendar.advance(datetime_to_ql_date(end_date), ql.Period("-1D"), ql.ModifiedFollowing))
+                    enable_intraday = True
+                else:
+                    cme_end_date = end_date
+            else:
+                raise ValueError(f"{end_date} is in the future")
+        else:
+            cme_end_date = None
+
+        enable_intraday = False
+        if bdates:
+            today = chi_now.date()
+            if any(d.date() == today and chi_now < CME_EOD_REPORT_RELEASE for d in bdates):
+                enable_intraday = True
+                end_date = chi_now
+
+            bdates = [d for d in bdates if d.date() != today or (d.date() == today and chi_now >= CME_EOD_REPORT_RELEASE)]
+
+        ql_curves_dict: Dict[datetime, ql.YieldTermStructure] = {}
+
+        if (bdates and len(bdates) > 0) or (start_date and cme_end_date):
+            cme_eod_curve_reports_dict_df = self.cme_fetcher_v1.fetch_curve_reports(
+                start_date=start_date,
+                end_date=cme_end_date,
+                bdates=bdates,
+                show_tqdm=show_tqdm,
+                max_connections=max_connections,
+                max_keepalive_connections=max_keepalive_connections,
+            )
+
+            curve_iter = (
+                tqdm.tqdm(cme_eod_curve_reports_dict_df.items(), desc=f"BUILDING {curve} {"DISCOUNT" if type == "Df" else "ZERO"} CURVES..")
+                if show_tqdm
+                else cme_eod_curve_reports_dict_df.items()
+            )
+            for curve_date, curve_report_df in curve_iter:
+                try:
+                    curve_report_df = curve_report_df[curve_report_df["Curve Name"] == curve]
+                    if curve_report_df.empty:
+                        ql_curves_dict[curve_date] = None
+                        self._logger.error(f"No data from {curve} on {curve_date}")
+                        continue
+
+                    curve_report_df["Date"] = pd.to_datetime(curve_report_df["Date"], format="%m/%d/%Y", errors="coerce")
+                    curve_report_df = curve_report_df.sort_values(by=["Date"])
+
+                    if type == "Df" and type not in curve_report_df.columns:
+                        type = "DF"
+                    curve_report_df[type] = pd.to_numeric(curve_report_df[type], errors="coerce")
+
+                    datetime_series = curve_report_df["Date"].reset_index(drop=True).copy()
+                    type_series = curve_report_df[type].reset_index(drop=True).copy()
+
+                    #  QuantLib: the first discount must be == 1.0 to flag the corresponding date as reference date
+                    if not curve_date in datetime_series and type in ["Df", "DF"]:
+                        datetime_series = pd.concat([pd.Series([curve_date]), datetime_series])
+                        type_series = pd.concat([pd.Series([1]), type_series])
+
+                    ql_curve_build_func = build_ql_discount_curve if type in ["Df", "DF"] else build_ql_zero_curve
+                    ql_curve = ql_curve_build_func(
+                        datetime_series,
+                        type_series,
+                        ql_day_count,
+                        ql_calendar,
+                        f"df_{interpolation_algo}" if type in ["Df", "DF"] else f"z_{interpolation_algo}",
+                    )
+                    if enable_extrapolation:
+                        ql_curve.enableExtrapolation()
+
+                    naive_close = datetime(curve_date.year, curve_date.month, curve_date.day, 17, 0, 0)
+                    ny_tz = pytz.timezone("US/Eastern")
+                    curve_date_ny_close = ny_tz.localize(naive_close)
+                    curve_date_ny_close_utc = curve_date_ny_close.astimezone(pytz.utc)
+                    ql_curves_dict[curve_date_ny_close_utc] = ql_curve
+
+                except Exception as e:
+                    self._logger.error(f"Error when building Quantlib Curve for {curve} on {curve_date}: {e}")
+
+        if enable_intraday and curve == "USD-SOFR-1D":
+            intraday_ql_discount_curve, intraday_timestamp = self.eris_fetcher.fetch_intraday_discount_curve(
+                ql_dc=ql_day_count,
+                ql_cal=ql_calendar,
+                show_tqdm=show_tqdm,
+                interpolation_algo=interpolation_algo,
+                enable_extrapolation=enable_extrapolation,
+                return_intraday_timestamp=True,
+            )
+            ql_curves_dict[intraday_timestamp] = intraday_ql_discount_curve
+
+        return ql_curves_dict

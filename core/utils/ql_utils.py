@@ -1,7 +1,9 @@
 import calendar
+import functools
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from zoneinfo import ZoneInfo
+
 import pandas as pd
 import QuantLib as ql
 
@@ -97,11 +99,23 @@ def ql_period_to_months(p: ql.Period) -> int:
     elif unit == ql.Months:
         return p.length()
     elif unit == ql.Weeks:
-        # approximate conversion: 1 month ≈ 4.345 weeks
-        return round(p.length() / 4.345)
+        return round(p.length() / 4)
     elif unit == ql.Days:
-        # approximate conversion: 1 month ≈ 30 days
         return round(p.length() / 30)
+    else:
+        raise ValueError("Unsupported period unit: {}".format(unit))
+
+
+def ql_period_to_days(p: ql.Period) -> int:
+    unit = p.units()
+    if unit == ql.Years:
+        return p.length() * 360
+    elif unit == ql.Months:
+        return p.length() * 30
+    elif unit == ql.Weeks:
+        return p.length() * 4
+    elif unit == ql.Days:
+        return p.length()
     else:
         raise ValueError("Unsupported period unit: {}".format(unit))
 
@@ -209,14 +223,8 @@ def dates_to_string_tenor(effective_date: datetime, expiration_date: datetime, c
 
 
 def get_bdates_between(start_date: datetime, end_date: datetime, calendar: ql.Calendar) -> List[datetime]:
-    business_dates = []
-    current_date = start_date
-    while current_date <= end_date:
-        if calendar.isBusinessDay(datetime_to_ql_date(current_date)):
-            business_dates.append(current_date)
-        current_date += timedelta(days=1)
-
-    return business_dates
+    bdates = calendar.businessDayList(datetime_to_ql_date(start_date), datetime_to_ql_date(end_date))
+    return sorted([ql_date_to_datetime(bd) for bd in bdates])
 
 
 def datetime_today_utc():
@@ -282,3 +290,8 @@ def most_recent_business_day_from_date(input_date: datetime, ql_calendar: ql.Cal
         return datetime(current_ql.year(), current_ql.month(), current_ql.dayOfMonth())
     else:
         return current_ql
+
+
+@functools.lru_cache(maxsize=None)
+def _period_from_str(period_str: str) -> ql.Period:
+    return ql.Period(period_str)
