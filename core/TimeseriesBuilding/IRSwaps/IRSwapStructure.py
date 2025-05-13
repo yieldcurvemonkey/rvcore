@@ -1,14 +1,17 @@
+import math
 from datetime import datetime
 from enum import Enum, auto
 from functools import partial
-from typing import Callable, Dict, List, Optional, Any, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import math
 import numpy as np
 import QuantLib as ql
+from rateslib.calendars import get_imm
 
+from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
 from core.TimeseriesBuilding.Base.BaseStructure import BaseStructureFunctionMap
 from core.TimeseriesBuilding.Base.utils import build_irswap
+from core.utils.ql_utils import datetime_to_ql_date, ql_date_to_datetime
 
 
 def _linear_solve_for_risk_weighted_notionals(
@@ -50,6 +53,8 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
             swap_index=swap_index,
         )
         self._map = self._create_map()
+        self._cal = CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"]
+        self._curve_ref_date = curve_handle.referenceDate()
 
     def _create_map(self) -> Dict[IRSwapStructure, Callable[..., List[ql.FixedVsFloatingSwap]]]:
         return {
@@ -57,6 +62,17 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
             IRSwapStructure.CURVE: partial(self._build_curve),
             IRSwapStructure.FLY: partial(self._build_fly),
         }
+
+    def _to_dt(self, d: datetime | ql.Period | str, ref_date: datetime | ql.Date):
+        if isinstance(d, ql.Period):
+            d = ql_date_to_datetime(self._cal.advance(datetime_to_ql_date(ref_date), d))
+        if isinstance(d, ql.Date):
+            return ql_date_to_datetime(d)
+        if isinstance(d, str) and d.upper().startswith("IMM_"):
+            return get_imm(code=d.split("IMM_")[-1])
+        if isinstance(d, str):
+            d = ql_date_to_datetime(self._cal.advance(datetime_to_ql_date(ref_date), ql.Period(d)))
+        return d
 
     def _leg(
         self,
@@ -67,15 +83,21 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         notional: Optional[float] = 100_000_000,
         bpv: Optional[float] = None,
     ) -> ql.FixedVsFloatingSwap:
-        if tenor and "x" in tenor:
-            fwd, tenor = tenor.split("x")
-            fwd, tenor = ql.Period(fwd), ql.Period(tenor)
-        elif tenor:
-            fwd, tenor = ql.Period("0D"), ql.Period(tenor) if tenor else None
-        elif effective_date and maturity_date:
+        if tenor.startswith("IMM_"):
+            imm_date, mat_date = tenor.split("x")
+            effective_date = self._to_dt(imm_date, ql_date_to_datetime(self._curve_ref_date))
+            maturity_date = self._to_dt(mat_date, effective_date)
             fwd, tenor = None, None
         else:
-            raise ValueError("Need to define tenor or dates")
+            if tenor and "x" in tenor:
+                fwd, tenor = tenor.split("x")
+                fwd, tenor = ql.Period(fwd), ql.Period(tenor)
+            elif tenor:
+                fwd, tenor = ql.Period("0D"), ql.Period(tenor) if tenor else None
+            elif effective_date and maturity_date:
+                fwd, tenor = None, None
+            else:
+                raise ValueError("Need to define tenor or dates")
 
         sw = build_irswap(
             curve=self.common_kwargs["curve"],

@@ -1,8 +1,12 @@
+import re
+from datetime import datetime
+from typing import Dict, List, Literal, Optional, Tuple
+
 import pandas as pd
 import QuantLib as ql
-from typing import Optional, List, Literal, Dict, Optional, Literal
+import tqdm
 
-from core.utils.ql_utils import period_to_string, period_to_months, parse_tenor_string
+from core.utils.ql_utils import parse_tenor_string, period_to_months, period_to_string
 
 
 def build_ql_interpolated_vol_cube(
@@ -10,6 +14,8 @@ def build_ql_interpolated_vol_cube(
     ql_swap_index: ql.SwapIndex,
     pre_calibrate: Optional[bool] = False,
 ) -> ql.InterpolatedSwaptionVolatilityCube:
+    ql.Settings.instance().evaluationDate = ql_swap_index.forwardingTermStructure().referenceDate()
+
     atm_df = vol_cube[0]
     expiries = [ql.Period(t) for t in atm_df.index]
     tails = [ql.Period(t) for t in atm_df.columns]
@@ -100,6 +106,12 @@ def build_ql_sabr_vol_cube(
     pre_calibrate: Optional[bool] = False,
 ) -> ql.SabrSwaptionVolatilityCube:
     ql.Settings.instance().evaluationDate = ql_swap_index.forwardingTermStructure().referenceDate()
+
+    for strike_offset in vol_cube:
+        vol_cube[strike_offset] = vol_cube[strike_offset].sort_index(key=lambda i: i.map(ql.Period))[
+            vol_cube[strike_offset].columns.sort_values(key=lambda i: i.map(ql.Period)).values
+        ]
+
     atm_vol_grid = vol_cube[0]
 
     spread_opt_tenors = [ql.Period(e) for e in atm_vol_grid.index]
@@ -159,3 +171,42 @@ def build_ql_sabr_vol_cube(
 
     ql_sabr_vol_cube.enableExtrapolation()
     return ql_sabr_vol_cube
+
+
+def _parse_cols_fast(cols: List[str]) -> Tuple[List[str], List[str], List[int]]:
+    _RX = re.compile(r"(?P<exp>[^x]+)x(?P<tail>[^\s]+)\s+ATMF(?P<off>[+-]?\d*)", re.I)
+    exp, tail, off = [], [], []
+    for c in cols:
+        m = _RX.fullmatch(c)
+        if m is None:
+            raise ValueError(f"bad label: {c!r}")
+        exp.append(m.group("exp"))
+        tail.append(m.group("tail"))
+        txt = m.group("off")
+        off.append(0 if txt == "" else int(txt))
+    return exp, tail, off
+
+
+def df_to_cube_ts(
+    df_wide: pd.DataFrame,
+) -> Dict[datetime, Dict[int, pd.DataFrame]]:
+    exp, tail, off = _parse_cols_fast(df_wide.columns.tolist())
+
+    mi = pd.MultiIndex.from_arrays([exp, tail, off], names=["Expiry", "Tail", "Offset"])
+    df = df_wide.copy(deep=False)
+    df.columns = mi
+
+    offsets: List[int] = sorted(df.columns.get_level_values("Offset").unique())
+    cube_ts: Dict[datetime, Dict[int, pd.DataFrame]] = {}
+
+    for dt, row in tqdm.tqdm(df.iterrows(), desc="STRUCTURING FLATTEN CUBE...", total=len(df)):
+        offset_dict: Dict[int, pd.DataFrame] = {}
+        for off_val in offsets:
+            s = row.xs(off_val, level="Offset")
+            grid = s.unstack(level="Tail")
+            grid = grid.sort_index(key=lambda i: i.map(ql.Period))[grid.columns.sort_values(key=lambda i: i.map(ql.Period)).values]
+            offset_dict[int(off_val)] = grid
+
+        cube_ts[pd.to_datetime(dt)] = offset_dict
+
+    return cube_ts

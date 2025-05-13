@@ -4,8 +4,8 @@ from typing import Optional, List, Callable, Tuple, Iterable
 import numpy as np
 import QuantLib as ql
 
-from backend.Products.TimeseriesBuilding.Base.utils import build_swaption
-from backend.utils.ql_utils import ql_date_to_datetime
+from core.TimeseriesBuilding.Base.utils import build_irswaption
+from core.utils.ql_utils import ql_date_to_datetime
 
 
 def calc_spot_prem(swaption: ql.Swaption, curve_handle: ql.YieldTermStructureHandle, engine: ql.BachelierSwaptionEngine):
@@ -83,7 +83,7 @@ def calc_gamma(swaption: ql.Swaption, curve_handle: ql.YieldTermStructureHandle,
     r_p = "rec" if swaption.underlying().fixedLegBPS() > 0 else "pay"
     dS = bump_bps / 10_000.0
 
-    s_up = build_swaption(
+    s_up = build_irswaption(
         curve=curve,
         curve_handle=curve_handle,
         pricing_engine=engine,
@@ -94,7 +94,7 @@ def calc_gamma(swaption: ql.Swaption, curve_handle: ql.YieldTermStructureHandle,
         notional=notional,
         r_p=r_p,
     )
-    s_dn = build_swaption(
+    s_dn = build_irswaption(
         curve=curve,
         curve_handle=curve_handle,
         pricing_engine=engine,
@@ -120,7 +120,7 @@ def calc_dollar_gamma(swaption: ql.Swaption, curve_handle: ql.YieldTermStructure
     r_p = "rec" if swaption.underlying().fixedLegBPS() > 0 else "pay"
     dS = bump_bps / 10_000.0
 
-    s_up = build_swaption(
+    s_up = build_irswaption(
         curve=curve,
         curve_handle=curve_handle,
         pricing_engine=engine,
@@ -131,7 +131,7 @@ def calc_dollar_gamma(swaption: ql.Swaption, curve_handle: ql.YieldTermStructure
         notional=notional,
         r_p=r_p,
     )
-    s_dn = build_swaption(
+    s_dn = build_irswaption(
         curve=curve,
         curve_handle=curve_handle,
         pricing_engine=engine,

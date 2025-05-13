@@ -22,89 +22,6 @@ from core.TimeseriesBuilding.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
 from core.utils.ql_utils import datetime_to_ql_date, get_bdates_between, most_recent_business_day_ql, ql_date_to_datetime, ql_period_to_days
 
 
-def _process_irswap_single_query_with_cache(
-    cache_key: Tuple[datetime, Tuple],
-    *args,
-    **kwargs,
-) -> Tuple[Tuple[datetime, Tuple], Tuple[datetime, str, float]]:
-    return cache_key, _process_irswap_single_query(*args, **kwargs)
-
-
-def _process_irswap_single_query(
-    ref_date: datetime,
-    ql_curve_nodes: Dict[datetime, float],
-    curve: str,
-    ql_interpolation_algo_str: str,
-    query: IRSwapQuery,
-    fixings: Optional[Dict[datetime, float]] = None,
-) -> Tuple[datetime, str, float]:
-    ql.Settings.instance().evaluationDate = datetime_to_ql_date(ref_date)
-
-    ql_curve = build_ql_discount_curve(
-        datetime_series=pd.Series(ql_curve_nodes.keys()),
-        discount_factor_series=pd.Series(ql_curve_nodes.values()),
-        ql_dc=CME_IRSWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
-        ql_cal=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
-        interpolation_algo=f"df_{ql_interpolation_algo_str}",
-    )
-    ql_curve.enableExtrapolation()
-    curve_handle = ql.YieldTermStructureHandle(ql_curve)
-
-    irswap_index = None
-    if fixings:
-        irswap_index = CME_IRSWAP_CURVE_QL_PARAMS[curve]["irswapIndex"](curve_handle)
-        for d, f in fixings.items():
-            irswap_index.addFixing(datetime_to_ql_date(d), f)
-
-    pkg, rw = IRSwapStructureFunctionMap(curve=curve, curve_handle=curve_handle, swap_index=irswap_index).apply(
-        tenor=query.tenor,
-        effective_date=query.effective_date,
-        maturity_date=query.maturity_date,
-        value=query.value,
-        structure=query.structure,
-        **query.structure_kwargs,
-    )
-    val = IRSwapValueFunctionMap(package=pkg, risk_weights=rw, curve=curve, curve_handle=curve_handle).apply(query.value)
-    return ref_date, query.col_name(curve), val
-
-
-def _process_irswap_queries(
-    ref_date: datetime,
-    ql_curve_nodes: Dict[datetime, float],
-    curve: str,
-    ql_interpolation_algo_str: str,
-    irswap_queries: List[IRSwapQuery],
-    fixings: Optional[Dict[datetime, float]] = None,
-    date_col: Optional[str] = "Date",
-):
-    ql.Settings.instance().evaluationDate = datetime_to_ql_date(ref_date)
-
-    row = {date_col: ref_date}
-    ql_curve = build_ql_discount_curve(
-        datetime_series=pd.Series(ql_curve_nodes.keys()),
-        discount_factor_series=pd.Series(ql_curve_nodes.values()),
-        ql_dc=CME_IRSWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
-        ql_cal=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
-        interpolation_algo=f"df_{ql_interpolation_algo_str}",
-    )
-    ql_curve.enableExtrapolation()
-    curve_handle = ql.YieldTermStructureHandle(ql_curve)
-
-    irswap_index = None
-    if fixings:
-        irswap_index: ql.SwapIndex = CME_IRSWAP_CURVE_QL_PARAMS[curve]["irswapIndex"](curve_handle)
-        for d, f in fixings.items():
-            irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f)
-
-    ss_func_map = IRSwapStructureFunctionMap(curve=curve, curve_handle=curve_handle, swap_index=irswap_index)
-    for q in irswap_queries:
-        package, risk_weights = ss_func_map.apply(
-            tenor=q.tenor, effective_date=q.effective_date, maturity_date=q.maturity_date, value=q.value, structure=q.structure, **q.structure_kwargs
-        )
-        row[q.col_name(curve)] = IRSwapValueFunctionMap(package=package, risk_weights=risk_weights, curve=curve, curve_handle=curve_handle).apply(q.value)
-    return row
-
-
 class IRSwaps(BaseProductPlotter):
     _data_source: Literal["CME", "CSV_{path}"]
     _fixings: Dict[datetime, float] = None
@@ -382,7 +299,7 @@ class IRSwaps(BaseProductPlotter):
         bdates: Optional[List[datetime]] = None,
         refresh_cache: Optional[bool] = False,
         to_pydt: Optional[bool] = False,
-    ) -> Dict[datetime, ql.YieldTermStructure]:
+    ) -> Dict[datetime, ql.DiscountCurve]:
         assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
 
         input_bdates = get_bdates_between(start_date=start_date, end_date=end_date, calendar=self._ql_calendar) if (start_date and end_date) else bdates
@@ -635,6 +552,89 @@ class IRSwaps(BaseProductPlotter):
             y_axis_title="Rate",
             use_plotly=use_plotly,
         )
+
+
+def _process_irswap_single_query_with_cache(
+    cache_key: Tuple[datetime, Tuple],
+    *args,
+    **kwargs,
+) -> Tuple[Tuple[datetime, Tuple], Tuple[datetime, str, float]]:
+    return cache_key, _process_irswap_single_query(*args, **kwargs)
+
+
+def _process_irswap_single_query(
+    ref_date: datetime,
+    ql_curve_nodes: Dict[datetime, float],
+    curve: str,
+    ql_interpolation_algo_str: str,
+    query: IRSwapQuery,
+    fixings: Optional[Dict[datetime, float]] = None,
+) -> Tuple[datetime, str, float]:
+    ql.Settings.instance().evaluationDate = datetime_to_ql_date(ref_date)
+
+    ql_curve = build_ql_discount_curve(
+        datetime_series=pd.Series(ql_curve_nodes.keys()),
+        discount_factor_series=pd.Series(ql_curve_nodes.values()),
+        ql_dc=CME_IRSWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
+        ql_cal=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
+        interpolation_algo=f"df_{ql_interpolation_algo_str}",
+    )
+    ql_curve.enableExtrapolation()
+    curve_handle = ql.YieldTermStructureHandle(ql_curve)
+
+    irswap_index = None
+    if fixings:
+        irswap_index = CME_IRSWAP_CURVE_QL_PARAMS[curve]["swapIndex"](curve_handle)
+        for d, f in fixings.items():
+            irswap_index.addFixing(datetime_to_ql_date(d), f)
+
+    pkg, rw = IRSwapStructureFunctionMap(curve=curve, curve_handle=curve_handle, swap_index=irswap_index).apply(
+        tenor=query.tenor,
+        effective_date=query.effective_date,
+        maturity_date=query.maturity_date,
+        value=query.value,
+        structure=query.structure,
+        **query.structure_kwargs,
+    )
+    val = IRSwapValueFunctionMap(package=pkg, risk_weights=rw, curve=curve, curve_handle=curve_handle).apply(query.value)
+    return ref_date, query.col_name(curve), val
+
+
+def _process_irswap_queries(
+    ref_date: datetime,
+    ql_curve_nodes: Dict[datetime, float],
+    curve: str,
+    ql_interpolation_algo_str: str,
+    irswap_queries: List[IRSwapQuery],
+    fixings: Optional[Dict[datetime, float]] = None,
+    date_col: Optional[str] = "Date",
+):
+    ql.Settings.instance().evaluationDate = datetime_to_ql_date(ref_date)
+
+    row = {date_col: ref_date}
+    ql_curve = build_ql_discount_curve(
+        datetime_series=pd.Series(ql_curve_nodes.keys()),
+        discount_factor_series=pd.Series(ql_curve_nodes.values()),
+        ql_dc=CME_IRSWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
+        ql_cal=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
+        interpolation_algo=f"df_{ql_interpolation_algo_str}",
+    )
+    ql_curve.enableExtrapolation()
+    curve_handle = ql.YieldTermStructureHandle(ql_curve)
+
+    irswap_index = None
+    if fixings:
+        irswap_index: ql.SwapIndex = CME_IRSWAP_CURVE_QL_PARAMS[curve]["swapIndex"](curve_handle)
+        for d, f in fixings.items():
+            irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f)
+
+    ss_func_map = IRSwapStructureFunctionMap(curve=curve, curve_handle=curve_handle, swap_index=irswap_index)
+    for q in irswap_queries:
+        package, risk_weights = ss_func_map.apply(
+            tenor=q.tenor, effective_date=q.effective_date, maturity_date=q.maturity_date, value=q.value, structure=q.structure, **q.structure_kwargs
+        )
+        row[q.col_name(curve)] = IRSwapValueFunctionMap(package=package, risk_weights=risk_weights, curve=curve, curve_handle=curve_handle).apply(q.value)
+    return row
 
 
 def _process_date_grid(

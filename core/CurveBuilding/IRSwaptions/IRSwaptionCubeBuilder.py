@@ -7,7 +7,7 @@ import pandas as pd
 import QuantLib as ql
 import tqdm
 
-from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_SWAP_CURVE_QL_PARAMS
+from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
 from core.CurveBuilding.IRSwaptions.ql_cube_building_utils import build_ql_interpolated_vol_cube, build_ql_sabr_vol_cube
 from core.utils.ql_utils import get_bdates_between
 
@@ -87,7 +87,7 @@ class IRSwaptionCubeBuilder:
             get_bdates_between(
                 start_date=self.to_vanilla_pydt(start_date),
                 end_date=self.to_vanilla_pydt(end_date),
-                calendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                calendar=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
             )
             if (start_date and end_date)
             else [self.to_vanilla_pydt(bday) for bday in bdates]
@@ -114,7 +114,7 @@ class IRSwaptionCubeBuilder:
             get_bdates_between(
                 start_date=self.to_vanilla_pydt(start_date),
                 end_date=self.to_vanilla_pydt(end_date),
-                calendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
+                calendar=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
             )
             if (start_date and end_date)
             else [self.to_vanilla_pydt(bday) for bday in bdates]
@@ -143,20 +143,9 @@ class IRSwaptionCubeBuilder:
     ) -> Dict[datetime, ql.InterpolatedSwaptionVolatilityCube | ql.SabrSwaptionVolatilityCube]:
         assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
 
-        between_bdates = (
-            get_bdates_between(
-                start_date=self.to_vanilla_pydt(start_date),
-                end_date=self.to_vanilla_pydt(end_date),
-                calendar=CME_SWAP_CURVE_QL_PARAMS[curve]["calendar"],
-            )
-            if (start_date and end_date)
-            else [self.to_vanilla_pydt(bday) for bday in bdates]
-        )
-        valid_group_dates = list(set.intersection(set(self._scube_timeseries.keys()), set(ql_discount_curves.keys()), set(between_bdates)))
-
         cached_cubes: Dict[datetime, ql.InterpolatedSwaptionVolatilityCube | ql.SabrSwaptionVolatilityCube] = {}
         dates_to_compute = []
-        for dt in valid_group_dates:
+        for dt in ql_discount_curves.keys():
             if dt in self._ql_cube_cache:
                 cached_cubes[dt] = self._ql_cube_cache[dt]
             else:
@@ -206,19 +195,19 @@ def build_single_vol_cube(
     sabr_params_dict: Optional[Dict[str, Dict[Literal["alpha", "beta", "nu", "rho"], float]]] = None,
     precalibrate_cube: Optional[bool] = False,
 ) -> Tuple[datetime, ql.InterpolatedSwaptionVolatilityCube | ql.SabrSwaptionVolatilityCube]:
-    if CME_SWAP_CURVE_QL_PARAMS[curve]["is_ois"]:
+    if CME_IRSWAP_CURVE_QL_PARAMS[curve]["is_ois"]:
         ql_swap_index_wrapper = ql.OvernightIndexedSwapIndex
     else:
         ql_swap_index_wrapper = ql.SwapIndex
 
     ql_swap_index = ql_swap_index_wrapper(
         curve,
-        CME_SWAP_CURVE_QL_PARAMS[curve]["period"],
-        CME_SWAP_CURVE_QL_PARAMS[curve]["settlementDays"],
-        CME_SWAP_CURVE_QL_PARAMS[curve]["currency"],
-        CME_SWAP_CURVE_QL_PARAMS[curve]["swapIndex"](ql.YieldTermStructureHandle(ql_discount_curve)),
+        CME_IRSWAP_CURVE_QL_PARAMS[curve]["period"],
+        CME_IRSWAP_CURVE_QL_PARAMS[curve]["settlementDays"],
+        CME_IRSWAP_CURVE_QL_PARAMS[curve]["currency"],
+        CME_IRSWAP_CURVE_QL_PARAMS[curve]["swapIndex"](ql.YieldTermStructureHandle(ql_discount_curve)),
     )
-
+    
     if sabr_params_dict is not None and use_sabr:
         ql_vol_cube = build_ql_sabr_vol_cube(
             vol_cube=vol_cube,
@@ -232,5 +221,6 @@ def build_single_vol_cube(
             ql_swap_index=ql_swap_index,
             pre_calibrate=precalibrate_cube,
         )
+
 
     return as_of_date, ql_vol_cube

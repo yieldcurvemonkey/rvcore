@@ -27,7 +27,7 @@ class IRSwaptionStructure(Enum):
     RISK_REVERSAL = auto()
 
 
-class SwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructure, ql.Swaption]):
+class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructure, ql.Swaption]):
     _long_risk_weighted_structure_map = {
         IRSwaptionStructure.RECEIVER: np.array([1]),
         IRSwaptionStructure.PAYER: np.array([1]),

@@ -47,7 +47,7 @@ class IRSwaptionValue(Enum):
     # RETURNS = auto()
 
 
-class SwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
+class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
     def __init__(
         self,
         package: List[ql.Swaption],

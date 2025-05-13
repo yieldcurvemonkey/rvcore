@@ -1,6 +1,6 @@
 import calendar
 import functools
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
