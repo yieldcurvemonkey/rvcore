@@ -78,6 +78,7 @@ class IRSwaptions(BaseProductPlotter):
         self._curve = self._irswaps_product._curve
 
         if "CSV_" in data_source:
+            # TODO partial csv reads
             self._irswaptions_hist_timeseries_csv_df = pd.read_csv(data_source.split("_", 1)[-1]).set_index(date_col)
             if self._curve in self._DATA_SOURCE_UNFLAT_CUBE_CACHE:
                 self._scube_cache = self._DATA_SOURCE_UNFLAT_CUBE_CACHE[self._curve]

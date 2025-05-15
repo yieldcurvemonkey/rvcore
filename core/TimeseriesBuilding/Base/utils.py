@@ -183,7 +183,7 @@ def build_irswaption(
     underlying_maturity_date: Optional[datetime] = None,
     strike: str | float | int = "ATMF",
     notional: float = 100_000_000,
-    vega: Optional[float] = None, 
+    vega: Optional[float] = None,
     r_p: Literal["rec", "r", "pay", "p"] = "rec",
 ) -> ql.Swaption:
     ref_date: ql.Date = curve_handle.referenceDate()
@@ -280,17 +280,20 @@ def build_irswaption(
         underlying_effective_date = _to_dt(underlying_effective_date)
         underlying_maturity_date = _to_dt(underlying_maturity_date)
 
-    k = _convert_strike(
-        strike,
-        build_irswap(
-            curve=curve,
-            curve_handle=curve_handle,
-            swap_index=swap_index,
-            effective_date=underlying_effective_date,
-            maturity_date=underlying_maturity_date,
-            notional=notional,
-            r_p=r_p,
-        ).fairRate(),
+    k = (
+        _convert_strike(
+            strike,
+            build_irswap(
+                curve=curve,
+                curve_handle=curve_handle,
+                swap_index=swap_index,
+                effective_date=underlying_effective_date,
+                maturity_date=underlying_maturity_date,
+                notional=notional,
+                r_p=r_p,
+            ).fairRate(),
+        )
+        * 100
     )
     underlying = build_irswap(
         curve=curve,
@@ -309,7 +312,7 @@ def build_irswaption(
         V0 = ql_swaption.vega() / 10_000
         if V0 == 0:
             raise ValueError("Cannot scale notional: swaption vega is zero")
-        
+
         ql_swaption = build_irswaption(
             curve=curve,
             curve_handle=curve_handle,
@@ -321,7 +324,7 @@ def build_irswaption(
             underlying_effective_date=underlying_effective_date,
             underlying_maturity_date=underlying_maturity_date,
             strike=strike,
-            notional=notional * (vega / V0),   
+            notional=notional * (vega / V0),
             r_p=r_p,
         )
 

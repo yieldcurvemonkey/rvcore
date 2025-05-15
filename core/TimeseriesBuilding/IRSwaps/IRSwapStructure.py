@@ -83,7 +83,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         notional: Optional[float] = 100_000_000,
         bpv: Optional[float] = None,
     ) -> ql.FixedVsFloatingSwap:
-        if tenor.startswith("IMM_"):
+        if isinstance(tenor, str) and tenor.startswith("IMM_"):
             imm_date, mat_date = tenor.split("x")
             effective_date = self._to_dt(imm_date, ql_date_to_datetime(self._curve_ref_date))
             maturity_date = self._to_dt(mat_date, effective_date)

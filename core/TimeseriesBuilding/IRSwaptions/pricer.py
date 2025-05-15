@@ -58,9 +58,8 @@ def calc_delta(swaption: ql.Swaption, curve_handle: ql.YieldTermStructureHandle,
 def calc_dv01(swaption: ql.Swaption, curve_handle: ql.YieldTermStructureHandle, engine: ql.BachelierSwaptionEngine):
     curve_date = curve_handle.referenceDate()
     ql.Settings.instance().evaluationDate = curve_date
-    notional = swaption.underlying().nominal()
     swaption.setPricingEngine(engine)
-    abs_dv01 = abs(swaption.delta() / notional) * 100
+    abs_dv01 = abs(swaption.delta() / 10_000) # bps
     return abs_dv01 if swaption.underlying().fixedLegBPS() > 0 else -abs_dv01
 
 

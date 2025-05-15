@@ -18,6 +18,11 @@ def calc_bpv(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureHandle):
     swap.setPricingEngine(ql.DiscountingSwapEngine(curve_handle))
     return swap.fixedLegBPS()
 
+def calc_pv01(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureHandle):
+    ql.Settings.instance().evaluationDate = curve_handle.referenceDate()
+    swap.setPricingEngine(ql.DiscountingSwapEngine(curve_handle))
+    return swap.fixedLegBPS() # bumps fixed rate/coupon
+
 def calc_notional(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureHandle):
     ql.Settings.instance().evaluationDate = curve_handle.referenceDate()
     swap.setPricingEngine(ql.DiscountingSwapEngine(curve_handle))

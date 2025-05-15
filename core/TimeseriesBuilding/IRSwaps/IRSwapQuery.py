@@ -118,7 +118,8 @@ class IRSwapQuery(BaseQuery):
 
             self.effective_date = ql_date_to_datetime(pkg.startDate())
             self.maturity_date = ql_date_to_datetime(pkg.maturityDate())
-            self.structure_kwargs = self.structure_kwargs | {"fixed_rate": pkg.fairRate() * 100}
+            if "fixed_rate" not in self.structure_kwargs:
+                self.structure_kwargs = self.structure_kwargs | {"fixed_rate": pkg.fairRate() * 100}
 
     def return_query(self) -> List["IRSwapQuery"]:
         if isinstance(self.value, list):
@@ -154,7 +155,7 @@ class IRSwapQuery(BaseQuery):
 
         if self.name:
             return self.name
-        prefix = f"{curve_name} " if curve_name else f"{self._curve_name} " if self._curve_name else "" 
+        prefix = f"{curve_name} " if curve_name else f"{self._curve_name} " if self._curve_name else ""
         return f"{prefix}{swap_name} {fmt} {self.structure.name} {self.value.name}" if swap_name else f"{prefix} {fmt} {self.structure.name} {self.value.name}"
 
     def eval_expression(self, curve_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
