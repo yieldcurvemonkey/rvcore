@@ -246,7 +246,7 @@ class IRSwaps(BaseProductPlotter):
             to_pydt=to_pydt,
         )
 
-        idx_cls = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["irswapIndex"]
+        idx_cls = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["swapIndex"]
         out: Dict[datetime, ql.SwapIndex] = {}
 
         for dt, curve in curves.items():

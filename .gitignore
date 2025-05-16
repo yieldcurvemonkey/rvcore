@@ -51,5 +51,9 @@ docs/_build/
 
 .env
 
+temp.py
+temp2.py
 temp.ipynb
 temp2.ipynb
+temp.xlsx
+temp2.xlsx
