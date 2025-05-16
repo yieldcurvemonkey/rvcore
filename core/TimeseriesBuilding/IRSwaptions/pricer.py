@@ -2,7 +2,7 @@ import math
 from typing import Optional, List, Callable, Tuple, Iterable
 
 import numpy as np
-import QuantLib as ql
+from core.utils.ql_loader import ql
 
 from core.TimeseriesBuilding.Base.utils import build_irswaption
 from core.utils.ql_utils import ql_date_to_datetime

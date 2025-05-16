@@ -2,7 +2,7 @@ import asyncio
 import re
 import sys
 import warnings
-import QuantLib as ql
+from core.utils.ql_loader import ql
 from datetime import datetime
 from io import BytesIO
 from typing import Dict, Literal, Optional, Tuple, Union, List

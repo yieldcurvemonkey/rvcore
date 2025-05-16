@@ -3,7 +3,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import QuantLib as ql
+from core.utils.ql_loader import ql
 import tqdm
 from joblib import Parallel, delayed
 
@@ -539,6 +539,7 @@ class IRSwaps(BaseProductPlotter):
         fwd_tenors: Optional[List[str]] = ["0D"],
         irswap_tenors: Optional[List[str]] = None,
         n_jobs: Optional[int] = 1,
+        return_data: Optional[bool] = False,
     ):
         irswap_tenors = self._default_underlying_tenors if not irswap_tenors else irswap_tenors
         irswaps_term_structure_dict_df = self._build_fwd_irswaps_term_structure_grid_timeseries(
@@ -552,6 +553,8 @@ class IRSwaps(BaseProductPlotter):
             y_axis_title="Rate",
             use_plotly=use_plotly,
         )
+        if return_data:
+            return irswaps_term_structure_dict_df
 
 
 def _process_irswap_single_query_with_cache(

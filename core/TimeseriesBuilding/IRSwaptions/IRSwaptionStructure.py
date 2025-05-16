@@ -4,7 +4,7 @@ from typing import Callable, List, Optional, Dict, Union, Literal
 from datetime import datetime
 
 import numpy as np
-import QuantLib as ql
+from core.utils.ql_loader import ql
 from scipy.optimize import newton
 
 from core.TimeseriesBuilding.Base.BaseStructure import BaseStructureFunctionMap

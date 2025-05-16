@@ -17,6 +17,7 @@ pytz==2024.2
 pywin32==308
 pyzipper==0.3.6
 QuantLib==1.37
+QuantLib-Risks==1.33.3
 rateslib==1.7.0
 Requests==2.32.3
 schedule==1.2.2

@@ -5,7 +5,7 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-import QuantLib as ql
+from core.utils.ql_loader import ql
 from rateslib.calendars import get_imm
 
 from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
@@ -39,7 +39,7 @@ class IRSwapStructure(Enum):
     FLY = auto()
 
 
-class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.FixedVsFloatingSwap]):
+class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.VanillaSwap]):
     def __init__(
         self,
         curve: str,
@@ -56,7 +56,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         self._cal = CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"]
         self._curve_ref_date = curve_handle.referenceDate()
 
-    def _create_map(self) -> Dict[IRSwapStructure, Callable[..., List[ql.FixedVsFloatingSwap]]]:
+    def _create_map(self) -> Dict[IRSwapStructure, Callable[..., List[ql.VanillaSwap]]]:
         return {
             IRSwapStructure.OUTRIGHT: partial(self._build_outright),
             IRSwapStructure.CURVE: partial(self._build_curve),
@@ -82,7 +82,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         fixed_rate: Optional[float] = -0.00,
         notional: Optional[float] = 100_000_000,
         bpv: Optional[float] = None,
-    ) -> ql.FixedVsFloatingSwap:
+    ) -> ql.VanillaSwap:
         if isinstance(tenor, str) and tenor.startswith("IMM_"):
             imm_date, mat_date = tenor.split("x")
             effective_date = self._to_dt(imm_date, ql_date_to_datetime(self._curve_ref_date))
@@ -120,7 +120,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         constrained_leg_index: Optional[int] = None,
         constrained_notional: Optional[float] = None,
         constrained_bpv: Optional[float] = None,
-    ) -> List[ql.FixedVsFloatingSwap]:
+    ) -> List[ql.VanillaSwap]:
         n = len(leg_specs)
         rw = np.array(risk_weights or ([1.0, -1.0] + [0.0] * (n - 2))[:n], dtype=float)
 
@@ -159,7 +159,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         notional: Optional[float] = 100_000_000,
         bpv: Optional[float] = None,
         **_,
-    ) -> Tuple[List[ql.FixedVsFloatingSwap], List[float]]:
+    ) -> Tuple[List[ql.VanillaSwap], List[float]]:
         return (
             [
                 self._leg(
@@ -190,7 +190,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         front_fixed_rate: Optional[float] = -0,
         back_fixed_rate: Optional[float] = -0,
         **_,
-    ) -> Tuple[List[ql.FixedVsFloatingSwap], List[float]]:
+    ) -> Tuple[List[ql.VanillaSwap], List[float]]:
         assert sum(x is not None for x in (front_notional, back_notional, bpv)) == 1, "Exactly one of front_notional, back_notional or bpv must be provided"
         assert len(risk_weights) == 2, "CURVE 2 RISK WEIGHTS"
 
@@ -244,7 +244,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, ql.Fi
         bpv: Optional[float] = None,
         risk_weights: Optional[List[float]] = [1.0, 2.0, 1.0],
         **_,
-    ) -> Tuple[List[ql.FixedVsFloatingSwap], List[float]]:
+    ) -> Tuple[List[ql.VanillaSwap], List[float]]:
         assert (
             sum(x is not None for x in (front_notional, belly_notional, back_notional, bpv)) == 1
         ), "Exactly one of front_notional, belly_notional, back_notional or bpv must be provided"

@@ -2,7 +2,7 @@ import math
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Optional
 
-import QuantLib as ql
+from core.utils.ql_loader import ql
 
 from core.TimeseriesBuilding.Base.BaseValue import BaseValueFunctionMap
 from core.TimeseriesBuilding.IRSwaps.pricer import (

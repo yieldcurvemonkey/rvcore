@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import QuantLib as ql
+from core.utils.ql_loader import ql
 import tqdm
 from joblib import Parallel, delayed
 

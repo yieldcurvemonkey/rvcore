@@ -6,7 +6,7 @@ from typing import Dict, List, Literal, Optional
 
 import pandas as pd
 import pytz
-import QuantLib as ql
+from core.utils.ql_loader import ql
 import tqdm.asyncio
 
 from core.DataFetching.BaseFetcher import BaseFetcher

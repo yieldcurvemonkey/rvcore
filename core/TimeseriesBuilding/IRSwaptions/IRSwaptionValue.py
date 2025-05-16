@@ -1,4 +1,4 @@
-import QuantLib as ql
+from core.utils.ql_loader import ql
 
 from enum import Enum, auto
 from typing import List, Any, Dict, Callable

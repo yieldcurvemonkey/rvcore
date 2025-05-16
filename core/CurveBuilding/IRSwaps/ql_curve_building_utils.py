@@ -3,7 +3,7 @@ from typing import List, Literal, Optional, Dict
 
 import numpy as np
 import pandas as pd
-import QuantLib as ql
+from core.utils.ql_loader import ql
 
 from core.utils.ql_utils import datetime_to_ql_date, ql_date_to_datetime
 
@@ -33,8 +33,8 @@ def build_ql_discount_curve(
         "df_kruger_log": ql.KrugerLogDiscountCurve,
         "df_natural_log_cubic": ql.NaturalLogCubicDiscountCurve,
         "df_log_mixed_linear": ql.LogMixedLinearCubicDiscountCurve,
-        "df_log_parabolic_cubic": ql.LogParabolicCubicDiscountCurve,
-        "df_mono_log_parabolic_cubic": ql.MonotonicLogParabolicCubicDiscountCurve,
+        # "df_log_parabolic_cubic": ql.LogParabolicCubicDiscountCurve,
+        # "df_mono_log_parabolic_cubic": ql.MonotonicLogParabolicCubicDiscountCurve,
     }
     try:
         curve_class = curve_mapping[interpolation_algo]
@@ -73,9 +73,9 @@ def build_piecewise_ql_discount_curve(
         "pdf_kruger_log": ql.PiecewiseKrugerLogDiscount,
         "pdf_natural_log_cubic": ql.PiecewiseNaturalLogCubicDiscount,
         "pdf_log_mixed_linear": ql.PiecewiseLogMixedLinearCubicDiscount,
-        "pdf_log_parabolic_cubic": ql.PiecewiseLogParabolicCubicDiscount,
+        # "pdf_log_parabolic_cubic": ql.PiecewiseLogParabolicCubicDiscount,
         "pdf_spline_cubic_discount": ql.PiecewiseSplineCubicDiscount,
-        "pdf_mono_log_parabolic_cubic": ql.PiecewiseMonotonicLogParabolicCubicDiscount,
+        # "pdf_mono_log_parabolic_cubic": ql.PiecewiseMonotonicLogParabolicCubicDiscount,
     }
     try:
         curve_class = curve_mapping[interpolation_algo]
@@ -112,8 +112,8 @@ def build_ql_zero_curve(
         "z_log_cubic": ql.LogCubicZeroCurve,
         "z_monotonic_cubic": ql.MonotonicCubicZeroCurve,
         "z_kruger": ql.KrugerZeroCurve,
-        "z_parabolic_cubic": ql.ParabolicCubicZeroCurve,
-        "z_monotonic_parabolic_cubic": ql.MonotonicParabolicCubicZeroCurve,
+        # "z_parabolic_cubic": ql.ParabolicCubicZeroCurve,
+        # "z_monotonic_parabolic_cubic": ql.MonotonicParabolicCubicZeroCurve,
     }
     try:
         curve_class = curve_mapping[interpolation_algo]

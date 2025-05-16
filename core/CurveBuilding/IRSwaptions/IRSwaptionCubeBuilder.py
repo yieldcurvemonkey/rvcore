@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Dict, List, Literal, Optional, Tuple, TypeAlias
 
 import pandas as pd
-import QuantLib as ql
+from core.utils.ql_loader import ql
 import tqdm
 
 from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS

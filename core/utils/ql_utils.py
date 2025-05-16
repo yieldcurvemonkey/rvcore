@@ -5,7 +5,7 @@ from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import QuantLib as ql
+from core.utils.ql_loader import ql
 
 DEFAULT_SWAP_TENORS = [
     "1D",

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import httpx
 import pandas as pd
 import pytz
-import QuantLib as ql
+from core.utils.ql_loader import ql
 import tqdm
 import tqdm.asyncio
 from dateutil import parser, tz

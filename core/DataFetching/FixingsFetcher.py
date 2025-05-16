@@ -5,7 +5,7 @@ from typing import Dict, Optional
 
 import requests
 import pandas as pd
-import QuantLib as ql
+from core.utils.ql_loader import ql
 import functools
 
 from core.DataFetching.BaseFetcher import BaseFetcher

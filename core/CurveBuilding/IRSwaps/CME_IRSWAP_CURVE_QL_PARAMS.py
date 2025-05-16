@@ -1,4 +1,4 @@
-import QuantLib as ql
+from core.utils.ql_loader import ql
 from typing import Dict
 
 from core.CurveBuilding.IRSwaps.tenor_utils import OIS_GRID, IRS_GRID_STD, IRS_GRID_LONG, IRS_GRID_10Y, IRS_GRID_15Y
@@ -260,19 +260,19 @@ CME_IRSWAP_CURVE_QL_PARAMS: SwapCurveParamsType = {
     #     "paymentLag": 2,
     #     "settlementDays": 2,
     # },
-    "KRW-CD": {
-        "swapIndex": ql.Kofr,
-        "is_ois": True,
-        "dayCounter": ql.Actual365Fixed(),
-        "calendar": ql.SouthKorea(),
-        "businessConvention": ql.ModifiedFollowing,
-        "frequency": ql.Annual,
-        "period": ql.Period("1D"),
-        "currency": ql.KRWCurrency(),
-        "paymentLag": 1,
-        "settlementDays": 1,
-        "default_tenors": OIS_GRID[:-5],  # practical liquidity only out to 10 Y
-    },
+    # "KRW-CD": {
+    #     "swapIndex": ql.Kofr,
+    #     "is_ois": True,
+    #     "dayCounter": ql.Actual365Fixed(),
+    #     "calendar": ql.SouthKorea(),
+    #     "businessConvention": ql.ModifiedFollowing,
+    #     "frequency": ql.Annual,
+    #     "period": ql.Period("1D"),
+    #     "currency": ql.KRWCurrency(),
+    #     "paymentLag": 1,
+    #     "settlementDays": 1,
+    #     "default_tenors": OIS_GRID[:-5],  # practical liquidity only out to 10 Y
+    # },
     # "CLP-CLICP-1D": {
     #     "swapIndex": ql.CLPCLICP,
     #     "is_ois": True,

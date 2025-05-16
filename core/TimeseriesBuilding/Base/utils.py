@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Callable, Literal, Optional
 
 import math
-import QuantLib as ql
+from core.utils.ql_loader import ql
 from rateslib.calendars import get_imm
 from scipy.optimize import newton
 

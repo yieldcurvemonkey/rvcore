@@ -2,7 +2,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Union
 
-import QuantLib as ql
+from core.utils.ql_loader import ql
 
 from core.TimeseriesBuilding.Base.BaseQuery import BaseQuery
 from core.TimeseriesBuilding.IRSwaps.IRSwapStructure import IRSwapStructure, IRSwapStructureFunctionMap

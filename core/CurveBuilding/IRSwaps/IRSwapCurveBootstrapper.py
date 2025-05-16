@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Dict, List, Literal, Optional
 
 import pandas as pd
-import QuantLib as ql
+from core.utils.ql_loader import ql
 import tqdm
 from joblib import Parallel, delayed
 
@@ -181,4 +181,5 @@ def bootstrap_single_irswap_curve(
         return get_nodes_dict(ql_discount_curve)
 
     except Exception as e:
+        print("ERROR HERE ", e)
         return None
