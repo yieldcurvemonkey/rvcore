@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 
+import numpy as np
 import pandas as pd
 from core.utils.ql_loader import ql
 import tqdm
@@ -63,11 +64,13 @@ class IRSwapCurveBootstrapper:
         assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
         assert self._timeseries_df is not None, "'timeseries_df' is required for swap curve bootstrapping"
 
-        if not start_date and not end_date:
-            start_date = min(bdates)
-            end_date = max(bdates)
-
-        timeseries_df: pd.DataFrame = self._timeseries_df[(self._timeseries_df.index.date >= start_date.date()) & (self._timeseries_df.index.date <= end_date.date())]
+        if start_date and end_date:
+            timeseries_df: pd.DataFrame = self._timeseries_df[
+                (self._timeseries_df.index.date >= start_date.date()) & (self._timeseries_df.index.date <= end_date.date())
+            ]
+        else:
+            mask = np.isin(self._timeseries_df.index.date, [bd.date() for bd in bdates])
+            timeseries_df = self._timeseries_df.loc[mask]
 
         data_to_bootstrap = [(date, row.to_dict()) for date, row in timeseries_df.iterrows()]
         data_to_bootstrap_iter = tqdm.tqdm(data_to_bootstrap, desc=tqdm_message or "BOOTSTRAPPING CURVES...") if show_tqdm else data_to_bootstrap
@@ -142,7 +145,11 @@ def bootstrap_single_irswap_curve(
         if CME_IRSWAP_CURVE_QL_PARAMS[curve]["is_ois"]:
             ql_floating_index = CME_IRSWAP_CURVE_QL_PARAMS[curve]["swapIndex"](dummy_handle)
             rate_helpers = [
-                ql.OISRateHelper(2, ql.Period(term), ql.QuoteHandle(ql.SimpleQuote(rate / 100.0)), ql_floating_index) for term, rate in market_data.items()
+                ql.OISRateHelper(
+                    CME_IRSWAP_CURVE_QL_PARAMS[curve]["settlementDays"], ql.Period(term), ql.QuoteHandle(ql.SimpleQuote(rate / 100.0)), ql_floating_index
+                )
+                for term, rate in market_data.items()
+                if rate != None and not np.isnan(rate)
             ]
         else:
             ql_floating_index = ql.IborIndex(
@@ -181,5 +188,5 @@ def bootstrap_single_irswap_curve(
         return get_nodes_dict(ql_discount_curve)
 
     except Exception as e:
-        print("ERROR HERE ", e)
+        print(f"ERROR DURING {as_of_date} {curve} SWAP CURVE BOOTSTRAP: ", e)
         return None

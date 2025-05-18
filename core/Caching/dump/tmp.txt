@@ -1,0 +1,23 @@
+"You must be a cache hit, because I’ve been looking you up all day."
+
+"You call it hoarding, I call it caching for later."
+
+"Let’s cache up over lunch — I’ve got some stored value."
+
+"Trust issues? Nope. Just caching everything to be safe."
+
+"Caching is just memoization with better PR."
+
+"Write code. Cache. Pray it hits."
+
+"Why compute it twice when you can cache it wrong once?"
+
+"I spent a week caching a function that runs in O(1). But it’s blazing now."
+
+"Caching is just optimization with trust issues."
+
+"Tuned the cache. Saved 3ms. Lost 3 days. Worth it."
+
+"Premature optimization is the root of all evil. So I cached it early to avoid temptation."
+
+

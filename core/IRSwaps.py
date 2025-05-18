@@ -1,57 +1,48 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from functools import partial
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from core.utils.ql_loader import ql
 import tqdm
 from joblib import Parallel, delayed
 
-from core.Plotting.BaseProductPlotter import BaseProductPlotter
+from core.Caching.ZODBCacheMixin import ZODBCacheMixin
 
-from core.DataFetching.CMEFetcherV2 import CMEFetcherV2
-
-from core.CurveBuilding.IRSwaps.ql_curve_building_utils import build_ql_discount_curve, get_nodes_dict
 from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
 from core.CurveBuilding.IRSwaps.IRSwapCurveBootstrapper import IRSwapCurveBootstrapper
+from core.CurveBuilding.IRSwaps.ql_curve_building_utils import build_discount_curve_from_nodes, get_nodes_dict
 
-from core.TimeseriesBuilding.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapValue, IRSwapStructure, IRSwapQueryWrapper
+from core.DataFetching.CMEFetcherV2 import CMEFetcherV2
+from core.Plotting.BaseProductPlotter import BaseProductPlotter
+
+from core.TimeseriesBuilding.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper, IRSwapStructure, IRSwapValue
 from core.TimeseriesBuilding.IRSwaps.IRSwapStructure import IRSwapStructureFunctionMap
 from core.TimeseriesBuilding.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
 
+from core.utils.ql_loader import ql
 from core.utils.ql_utils import datetime_to_ql_date, get_bdates_between, most_recent_business_day_ql, ql_date_to_datetime, ql_period_to_days
 
 
-class IRSwaps(BaseProductPlotter):
-    _data_source: Literal["CME", "CSV_{path}"]
-    _fixings: Dict[datetime, float] = None
-    _curve: str = None
+class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
+    _DEFAULT_PRE_FETCH_CURVE_PERIOD = ql.Period("-1Y")
+    _DEFAULT_TZ = "US/Eastern"
+    _DEFAULT_FWD_TENORS = ["0D", "01M", "03M", "06M", "09M", "01Y", "02Y", "03Y", "05Y", "10Y"]
+    _DEFAULT_UNDERLYING_TENORS = None
 
-    _irswaps_hist_data_fetcher: IRSwapCurveBootstrapper = None
-    _irswaps_hist_timeseries_csv_df: pd.DataFrame = None
+    _DEFAULT_DSF_KEY = "HIST_IRSWAPSF"
+    _DEFAULT_DSF_OBJ = "obj"
+    _DEFAULT_DSF_OBJ_ARGS = "init_args"
+    _DEFAULT_DFS_FETCH_FUNC = "fetch_func"
+    _DEFAULT_DFS_FETCH_FUNC_ARGS = "fetch_func_args"
 
-    _ql_day_count: ql.DayCounter = None
-    _ql_bday_convention = None
-    _ql_calendar: ql.Calendar = None
-    _ql_compounded: Literal["ql.Compounding"] = None
+    _DEFAULT_INTRADAY_BS_MESSAGE = "BOOTSTRAPPING INTRADAY IRSWAPS CURVE..."
+    _DEFAULT_HIST_BS_MESSAGE = "BOOTSTRAPPING HISTORICAL IRSWAPS CURVE..."
 
-    _ql_curve_cache: Dict[datetime, ql.YieldTermStructure] = None
-    _ql_irswap_index_cache: Dict[datetime, ql.SwapIndex] = None
-    _fwd_irswaps_timeseries_cache: Dict[Tuple[datetime, Tuple[str, ...], Tuple[str, ...]], Dict[str, Union[datetime, float]]] = None
+    _IRSWAPS_QL_CURVE_CACHE = "_irswaps_ql_curve_cache"
+    _IRSWAPS_TIMESERIES_CACHE = "_irswaps_timeseries_cache"
 
-    __data_sources_funcs: Dict = None
-
-    _pre_fetch_curves: bool = False
-    _PRE_FETCH_CURVE_PERIOD = ql.Period("-1Y")
-    _date_col: str = None
-    _bootstrap_cols: List[str] = None
-    _default_tz = "US/Eastern"
-
-    _show_tqdm: bool = None
-    _proxies: Dict[str, str] = None
-
-    _default_fwd_irswap_tenors = ["0D", "01M", "03M", "06M", "09M", "01Y", "02Y", "03Y", "05Y", "10Y"]
-    _default_underlying_tenors = None # fmt: skip
     _IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES = "_INPUT_DATES"
     _IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE = "_BOOTSTRAP_TDQM_MESSAGE"
     _IRSWAP_CURVE_BOOTSTRAPPER_NJOBS = "_BOOTSTRAP_NJOBS"
@@ -135,26 +126,23 @@ class IRSwaps(BaseProductPlotter):
         warning_verbose: Optional[bool] = False,
         error_verbose: Optional[bool] = False,
     ):
-        super().__init__(
-            debug_verbose=debug_verbose,
+        BaseProductPlotter.__init__(
+            self,
             info_verbose=info_verbose,
+            debug_verbose=debug_verbose,
             warning_verbose=warning_verbose,
             error_verbose=error_verbose,
         )
+        ZODBCacheMixin.__init__(self)
 
-        # caches are instance-specific
-        self._ql_curve_cache = {}
-        self._ql_irswap_index_cache = {}
-        self._fwd_irswaps_timeseries_cache = {}
-        self.__data_sources_funcs = {}
         self._date_col = date_col
-
         if "CSV_" in data_source:
             csv_df = pd.read_csv(data_source.split("_", 1)[-1])
             csv_df[self._date_col] = pd.to_datetime(csv_df[self._date_col], errors="coerce", format="mixed")
             self._irswaps_hist_timeseries_csv_df = csv_df.set_index(self._date_col)
             self._data_source = "CSV"
         else:
+            self._irswaps_hist_timeseries_csv_df = None
             self._data_source = data_source
 
         self._curve = curve
@@ -162,7 +150,7 @@ class IRSwaps(BaseProductPlotter):
         self._ql_day_count = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["dayCounter"]
         self._ql_calendar = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["calendar"]
         self._ql_bday_convention = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["businessConvention"]
-        self._default_underlying_tenors = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["default_tenors"]
+        self._DEFAULT_UNDERLYING_TENORS = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["default_tenors"]
         self._ql_interpolation_algo = ql_interpolation_algo
         self._bootstrap_cols = bootstrap_cols
 
@@ -176,11 +164,13 @@ class IRSwaps(BaseProductPlotter):
         self._warning_verbose = warning_verbose
         self._error_verbose = error_verbose
 
+        self._ql_irswap_index_cache = {}
+
         self.__data_sources_funcs = {
-            "HIST_IRSWAPS": {
+            self._DEFAULT_DSF_KEY: {
                 "CME": {
-                    "obj": CMEFetcherV2,
-                    "init_args": (
+                    self._DEFAULT_DSF_OBJ: CMEFetcherV2,
+                    self._DEFAULT_DSF_OBJ_ARGS: (
                         self._FETCHER_TIMEOUT,
                         self._proxies,
                         self._debug_verbose,
@@ -188,8 +178,8 @@ class IRSwaps(BaseProductPlotter):
                         self._warning_verbose,
                         self._error_verbose,
                     ),
-                    "fetch_func": "build_ql_eod_curves",
-                    "fetch_func_args": (
+                    self._DEFAULT_DFS_FETCH_FUNC: "build_ql_eod_curves",
+                    self._DEFAULT_DFS_FETCH_FUNC_ARGS: (
                         self._curve,
                         "Df",
                         self._ql_day_count,
@@ -205,10 +195,10 @@ class IRSwaps(BaseProductPlotter):
                     ),
                 },
                 "CSV": {
-                    "obj": IRSwapCurveBootstrapper,
-                    "init_args": (self._irswaps_hist_timeseries_csv_df,),
-                    "fetch_func": "parallel_ql_irswap_curve_bootstrapper",
-                    "fetch_func_args": (
+                    self._DEFAULT_DSF_OBJ: IRSwapCurveBootstrapper,
+                    self._DEFAULT_DSF_OBJ_ARGS: (self._irswaps_hist_timeseries_csv_df,),
+                    self._DEFAULT_DFS_FETCH_FUNC: "parallel_ql_irswap_curve_bootstrapper",
+                    self._DEFAULT_DFS_FETCH_FUNC_ARGS: (
                         self._curve,
                         None,
                         None,
@@ -222,15 +212,135 @@ class IRSwaps(BaseProductPlotter):
                 },
             }
         }
-
-        self._irswaps_hist_data_fetcher = self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["obj"](
-            *self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["init_args"]
+        self._irswaps_hist_data_fetcher = self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DSF_OBJ](
+            *self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DSF_OBJ_ARGS]
         )
 
         if self._pre_fetch_curves:
-            pre_fetch_end_date = most_recent_business_day_ql(ql_calendar=self._ql_calendar, tz=self._default_tz, to_pydate=True)
-            pre_fetch_start_date = ql_date_to_datetime(self._ql_calendar.advance(datetime_to_ql_date(pre_fetch_end_date), self._PRE_FETCH_CURVE_PERIOD))
+            pre_fetch_end_date = most_recent_business_day_ql(ql_calendar=self._ql_calendar, tz=self._DEFAULT_TZ, to_pydate=True)
+            pre_fetch_start_date = ql_date_to_datetime(self._ql_calendar.advance(datetime_to_ql_date(pre_fetch_end_date), self._DEFAULT_PRE_FETCH_CURVE_PERIOD))
             self.fetch_ql_irswap_curves(start_date=pre_fetch_start_date, end_date=pre_fetch_end_date)
+
+    def _ensure_cache(self, attr: str):
+        if hasattr(self, attr):
+            delattr(self, attr)
+
+        cfg = self._cache_config()[attr]
+        self.zodb_open_cache(cache_attr=attr, **cfg)
+
+    def get_latest_cached_curve(self):
+        self._ensure_cache(self._IRSWAPS_QL_CURVE_CACHE)
+        k, v = self._irswaps_ql_curve_cache.popitem()
+        self.close_zodb()
+        return k, v
+
+    def fetch_latest_curve(self):
+        hist_irswaps_curve_fetch_func: callable = getattr(
+            self._irswaps_hist_data_fetcher, self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_FUNC]
+        )
+        hist_irswaps_curve_fetch_func_args_today = tuple(
+            (
+                [most_recent_business_day_ql(self._ql_calendar, self._DEFAULT_TZ, to_pydate=True)]
+                if arg == self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES
+                else (
+                    self._DEFAULT_INTRADAY_BS_MESSAGE
+                    if arg == self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE
+                    else 1 if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS else arg
+                )
+            )
+            for arg in self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_FUNC_ARGS]
+        )
+        todays_result: Dict[pd.Timestamp, ql.DiscountCurve] = hist_irswaps_curve_fetch_func(*hist_irswaps_curve_fetch_func_args_today)
+
+        return todays_result.popitem()
+
+    def fetch_ql_irswap_curves(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        bdates: Optional[List[datetime]] = None,
+        refresh_cache: Optional[bool] = False,
+        to_pydt: Optional[bool] = False,
+    ) -> Dict[datetime, ql.DiscountCurve]:
+        self._ensure_cache(self._IRSWAPS_QL_CURVE_CACHE)
+        assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
+
+        input_bdates = get_bdates_between(start_date=start_date, end_date=end_date, calendar=self._ql_calendar) if (start_date and end_date) else bdates
+        if not end_date and bdates:
+            end_date = max(bdates)
+
+        today = datetime.today().date()
+        non_today_bdates = [bday for bday in input_bdates if bday.date() != today]
+        todays_bdates = [bday for bday in input_bdates if bday.date() == today]
+
+        if not refresh_cache:
+            cached_dates = [dt.date() for dt in self._irswaps_ql_curve_cache.keys()]
+            non_today_bdates_not_cached = [bday for bday in non_today_bdates if bday.date() not in cached_dates]
+        else:
+            non_today_bdates_not_cached = non_today_bdates
+
+        if non_today_bdates_not_cached:
+            hist_irswaps_curve_fetch_func: callable = getattr(
+                self._irswaps_hist_data_fetcher, self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_FUNC]
+            )
+            hist_irswaps_curve_fetch_func_args = tuple(
+                (
+                    non_today_bdates_not_cached
+                    if arg == self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES
+                    else (
+                        self._DEFAULT_HIST_BS_MESSAGE
+                        if arg == self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE
+                        else (
+                            self._MAX_NJOBS
+                            if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS and len(non_today_bdates_not_cached) > 1
+                            else 1 if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS and len(non_today_bdates_not_cached) == 1 else arg
+                        )
+                    )
+                )
+                for arg in self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_FUNC_ARGS]
+            )
+            results = hist_irswaps_curve_fetch_func(*hist_irswaps_curve_fetch_func_args)
+            self._irswaps_ql_curve_cache.update(results)
+            self.zodb_commit()
+
+        todays_result: Dict[pd.Timestamp, ql.DiscountCurve] = {}
+        if todays_bdates:
+            hist_irswaps_curve_fetch_func: callable = getattr(
+                self._irswaps_hist_data_fetcher, self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_FUNC]
+            )
+            hist_irswaps_curve_fetch_func_args_today = tuple(
+                (
+                    todays_bdates
+                    if arg == self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES
+                    else (
+                        self._DEFAULT_INTRADAY_BS_MESSAGE
+                        if arg == self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE
+                        else 1 if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS else arg
+                    )
+                )
+                for arg in self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_FUNC_ARGS]
+            )
+            todays_result = hist_irswaps_curve_fetch_func(*hist_irswaps_curve_fetch_func_args_today)
+
+        final_result = {}
+        timestamp_to_datetime_map = {ts.date(): ts for ts in self._irswaps_ql_curve_cache.keys()}
+        for bday in non_today_bdates:
+            if bday.date() in timestamp_to_datetime_map:
+                if to_pydt:
+                    final_result[bday] = self._irswaps_ql_curve_cache[timestamp_to_datetime_map[bday.date()]]
+                else:
+                    final_result[timestamp_to_datetime_map[bday.date()]] = self._irswaps_ql_curve_cache[timestamp_to_datetime_map[bday.date()]]
+
+        if bool(todays_result):
+            if to_pydt:
+                todays_items = next(iter(todays_result.items()))
+                tdate = todays_items[0].date()
+                final_result[datetime(tdate.year, tdate.month, tdate.day)] = todays_items[1]
+            else:
+                final_result.update(todays_result)
+
+        self.close_zodb()
+        return final_result
 
     def fetch_irswap_index(
         self,
@@ -267,176 +377,6 @@ class IRSwaps(BaseProductPlotter):
 
         return out
 
-    def get_latest_cached_curve(self):
-        d = self._ql_curve_cache
-        k, last_value = _, d[k] = d.popitem()
-        return k, last_value
-
-    def fetch_latest_curve(self):
-        hist_irswaps_curve_fetch_func: callable = getattr(
-            self._irswaps_hist_data_fetcher, self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["fetch_func"]
-        )
-        hist_irswaps_curve_fetch_func_args_today = tuple(
-            (
-                [most_recent_business_day_ql(self._ql_calendar, self._default_tz, to_pydate=True)]
-                if arg == self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES
-                else (
-                    "BOOTSTRAPPING INTRADAY IRSWAPS CURVE..."
-                    if arg == self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE
-                    else 1 if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS else arg
-                )
-            )
-            for arg in self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["fetch_func_args"]
-        )
-        todays_result: Dict[pd.Timestamp, ql.DiscountCurve] = hist_irswaps_curve_fetch_func(*hist_irswaps_curve_fetch_func_args_today)
-
-        return todays_result.popitem()
-
-    def fetch_ql_irswap_curves(
-        self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        bdates: Optional[List[datetime]] = None,
-        refresh_cache: Optional[bool] = False,
-        to_pydt: Optional[bool] = False,
-    ) -> Dict[datetime, ql.DiscountCurve]:
-        assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
-
-        input_bdates = get_bdates_between(start_date=start_date, end_date=end_date, calendar=self._ql_calendar) if (start_date and end_date) else bdates
-        if not end_date and bdates:
-            end_date = max(bdates)
-
-        today = datetime.today().date()
-        non_today_bdates = [bday for bday in input_bdates if bday.date() != today]
-        todays_bdates = [bday for bday in input_bdates if bday.date() == today]
-
-        if not refresh_cache:
-            cached_dates = [dt.date() for dt in self._ql_curve_cache.keys()]
-            non_today_bdates_not_cached = [bday for bday in non_today_bdates if bday.date() not in cached_dates]
-        else:
-            non_today_bdates_not_cached = non_today_bdates
-
-        if non_today_bdates_not_cached:
-            hist_irswaps_curve_fetch_func: callable = getattr(
-                self._irswaps_hist_data_fetcher, self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["fetch_func"]
-            )
-            hist_irswaps_curve_fetch_func_args = tuple(
-                (
-                    non_today_bdates_not_cached
-                    if arg == self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES
-                    else (
-                        "BOOTSTRAPPING HISTORICAL IRSWAPS CURVE..."
-                        if arg == self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE
-                        else (
-                            self._MAX_NJOBS
-                            if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS and len(non_today_bdates_not_cached) > 1
-                            else 1 if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS and len(non_today_bdates_not_cached) == 1 else arg
-                        )
-                    )
-                )
-                for arg in self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["fetch_func_args"]
-            )
-            results = hist_irswaps_curve_fetch_func(*hist_irswaps_curve_fetch_func_args)
-            self._ql_curve_cache = self._ql_curve_cache | results
-
-        todays_result: Dict[pd.Timestamp, ql.DiscountCurve] = {}
-        if todays_bdates:
-            hist_irswaps_curve_fetch_func: callable = getattr(
-                self._irswaps_hist_data_fetcher, self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["fetch_func"]
-            )
-            hist_irswaps_curve_fetch_func_args_today = tuple(
-                (
-                    todays_bdates
-                    if arg == self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES
-                    else (
-                        "BOOTSTRAPPING INTRADAY IRSWAPS CURVE..."
-                        if arg == self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE
-                        else 1 if arg == self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS else arg
-                    )
-                )
-                for arg in self.__data_sources_funcs["HIST_IRSWAPS"][self._data_source]["fetch_func_args"]
-            )
-            todays_result = hist_irswaps_curve_fetch_func(*hist_irswaps_curve_fetch_func_args_today)
-
-        final_result = {}
-        timestamp_to_datetime_map = {ts.date(): ts for ts in self._ql_curve_cache.keys()}
-        for bday in non_today_bdates:
-            if bday.date() in timestamp_to_datetime_map:
-                if to_pydt:
-                    final_result[bday] = self._ql_curve_cache[timestamp_to_datetime_map[bday.date()]]
-                else:
-                    final_result[timestamp_to_datetime_map[bday.date()]] = self._ql_curve_cache[timestamp_to_datetime_map[bday.date()]]
-
-        if bool(todays_result):
-            if to_pydt:
-                todays_items = next(iter(todays_result.items()))
-                tdate = todays_items[0].date()
-                final_result[datetime(tdate.year, tdate.month, tdate.day)] = todays_items[1]
-            else:
-                final_result.update(todays_result)
-
-        return final_result
-
-    def _build_fwd_irswaps_timeseries(
-        self,
-        ql_curves_ts_dict: Dict[datetime, ql.DiscountCurve],
-        queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
-        n_jobs: int = 1,
-    ) -> pd.DataFrame:
-        flat_queries: List[IRSwapQuery] = []
-        for q in queries:
-            if isinstance(q, Tuple):
-                q = q[0]
-            if isinstance(q, list):
-                flat_queries.extend(q)
-            elif isinstance(q, IRSwapQueryWrapper):
-                flat_queries.extend(q.return_query())
-            else:
-                flat_queries.append(q)
-
-        tasks, cached_rows = [], []
-        for ref_date, ql_curve in ql_curves_ts_dict.items():
-            ql_curve_nodes = get_nodes_dict(ql_curve)
-            for query in flat_queries:
-                q_key = _query_to_key(query)
-                cache_key = (ref_date, q_key)
-                if cache_key in self._fwd_irswaps_timeseries_cache:
-                    cached_rows.append(self._fwd_irswaps_timeseries_cache[cache_key])
-                else:
-                    tasks.append((cache_key, ref_date, ql_curve_nodes, query))
-
-        tasks_iter = tqdm.tqdm(tasks, desc="PRICING IRSWAPS...") if self._show_tqdm else tasks
-        new_results = Parallel(n_jobs=n_jobs, timeout=999999 if n_jobs != 1 else None)(
-            delayed(_process_irswap_single_query_with_cache)(
-                cache_key,
-                ref_date,
-                ql_curve_nodes,
-                self._curve,
-                self._ql_interpolation_algo,
-                query,
-                self._fixings,
-            )
-            for cache_key, ref_date, ql_curve_nodes, query in tasks_iter
-        )
-
-        for ck, row in new_results:
-            self._fwd_irswaps_timeseries_cache[ck] = row
-
-        all_rows = cached_rows + [row for _, row in new_results]
-        if not all_rows:
-            return pd.DataFrame([], index=pd.DatetimeIndex([]))
-
-        rows_df = pd.DataFrame(all_rows, columns=[self._date_col, "col", "val"])
-        rows_df = rows_df.drop_duplicates(subset=[self._date_col, "col"], keep="last")
-        df = rows_df.pivot(index=self._date_col, columns="col", values="val").sort_index()
-        df.columns.name = None
-        try:
-            df.index = df.index.tz_convert(self._default_tz)
-        except Exception as e:
-            self._logger.error(f"'timeseries_builder' failed to convert to {self._default_tz}: {e}")
-
-        return df
-
     def irswaps_timeseries_builder(
         self,
         start_date: datetime,
@@ -445,7 +385,6 @@ class IRSwaps(BaseProductPlotter):
         return_all: Optional[bool] = False,
         n_jobs: Optional[int] = 1,
     ) -> pd.DataFrame:
-
         ts_df = self._build_fwd_irswaps_timeseries(
             ql_curves_ts_dict=self.fetch_ql_irswap_curves(start_date=start_date, end_date=end_date),
             queries=queries,
@@ -479,10 +418,138 @@ class IRSwaps(BaseProductPlotter):
         cols_to_return = list(set(cols_to_return))
         ts_df = ts_df[cols_to_return].sort_index()
         try:
-            ts_df.index = ts_df.index.tz_convert(self._default_tz)
+            ts_df.index = ts_df.index.tz_convert(self._DEFAULT_TZ)
         except Exception as e:
-            self._logger.error(f"'timeseries_builder' failed to convert to {self._default_tz}: {e}")
+            self._logger.error(f"'timeseries_builder' failed to convert to {self._DEFAULT_TZ}: {e}")
         return ts_df
+
+    def irswaps_data_grid_builder(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        bdates: Optional[List[datetime]] = None,
+        fwd_tenors: Optional[List[str]] = None,
+        irswap_tenors: Optional[List[str]] = None,
+        irswap_value: Optional[IRSwapValue] = IRSwapValue.RATE,
+        to_pydt: Optional[bool] = False,
+        n_jobs: Optional[int] = 1,
+    ):
+        fwd_tenors = self._DEFAULT_FWD_TENORS if not fwd_tenors else fwd_tenors
+        irswap_tenors = self._DEFAULT_UNDERLYING_TENORS if not irswap_tenors else irswap_tenors
+        return self._build_fwd_irswaps_term_structure_grid_timeseries(
+            ql_curves_ts_dict=self.fetch_ql_irswap_curves(start_date=start_date, end_date=end_date, bdates=bdates, to_pydt=to_pydt),
+            fwd_tenors=fwd_tenors,
+            underlying_tenors=irswap_tenors,
+            irswap_value=irswap_value,
+            n_jobs=n_jobs,
+        )
+
+    def irswaps_term_structure_plotter(
+        self,
+        bdates: List[datetime],
+        use_plotly: Optional[bool] = False,
+        fwd_tenors: Optional[List[str]] = ["0D"],
+        irswap_tenors: Optional[List[str]] = None,
+        n_jobs: Optional[int] = 1,
+        return_data: Optional[bool] = False,
+    ):
+        irswap_tenors = self._DEFAULT_UNDERLYING_TENORS if not irswap_tenors else irswap_tenors
+        irswaps_term_structure_dict_df = self._build_fwd_irswaps_term_structure_grid_timeseries(
+            ql_curves_ts_dict=self.fetch_ql_irswap_curves(bdates=bdates), fwd_tenors=fwd_tenors, underlying_tenors=irswap_tenors, n_jobs=n_jobs
+        )
+        self._term_structure_plotter(
+            term_structure_dict_df=irswaps_term_structure_dict_df,
+            plot_title=f"{self._curve} Curve",
+            x_axis_col_sorter_func=lambda x: ql_period_to_days(ql.Period(x)),
+            x_axis_title="Term",
+            y_axis_title="Rate",
+            use_plotly=use_plotly,
+        )
+        if return_data:
+            return irswaps_term_structure_dict_df
+
+    def _cache_config(self) -> dict[str, dict]:
+        cache_ds_id = self._data_source if not self._data_source.startswith("CSV_") else f"CSV_{Path(self._data_source.split('_', 1)[-1]).stem}"
+        return {
+            self._IRSWAPS_QL_CURVE_CACHE: dict(
+                path=ZODBCacheMixin.default_cache_path(stem=f"{self._IRSWAPS_QL_CURVE_CACHE}_{cache_ds_id}_{self._curve}_{self._ql_interpolation_algo}"),
+                encode=partial(get_nodes_dict, to_iso=True),
+                decode=partial(
+                    build_discount_curve_from_nodes,
+                    ql_dc=self._ql_day_count,
+                    ql_cal=self._ql_calendar,
+                    interpolation_algo=f"df_{self._ql_interpolation_algo}",
+                ),
+            ),
+            self._IRSWAPS_TIMESERIES_CACHE: dict(
+                path=ZODBCacheMixin.default_cache_path(stem=f"{self._IRSWAPS_TIMESERIES_CACHE}_{cache_ds_id}_{self._curve}_{self._ql_interpolation_algo}"),
+            ),
+        }
+
+    def _build_fwd_irswaps_timeseries(
+        self,
+        ql_curves_ts_dict: Dict[datetime, ql.DiscountCurve],
+        queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
+        n_jobs: int = 1,
+    ) -> pd.DataFrame:
+        self._ensure_cache(self._IRSWAPS_TIMESERIES_CACHE)
+
+        flat_queries: List[IRSwapQuery] = []
+        for q in queries:
+            if isinstance(q, Tuple):
+                q = q[0]
+            if isinstance(q, list):
+                flat_queries.extend(q)
+            elif isinstance(q, IRSwapQueryWrapper):
+                flat_queries.extend(q.return_query())
+            else:
+                flat_queries.append(q)
+
+        tasks, cached_rows = [], []
+        for ref_date, ql_curve in ql_curves_ts_dict.items():
+            ql_curve_nodes = get_nodes_dict(ql_curve)
+            for query in flat_queries:
+                q_key = _query_to_key(query)
+                cache_key = (ref_date, q_key)
+                if cache_key in self._irswaps_timeseries_cache:
+                    cached_rows.append(self._irswaps_timeseries_cache[cache_key])
+                else:
+                    tasks.append((cache_key, ref_date, ql_curve_nodes, query))
+
+        tasks_iter = tqdm.tqdm(tasks, desc="PRICING IRSWAPS...") if self._show_tqdm else tasks
+        new_results = Parallel(n_jobs=n_jobs, timeout=999999 if n_jobs != 1 else None)(
+            delayed(_process_irswap_single_query_with_cache)(
+                cache_key,
+                ref_date,
+                ql_curve_nodes,
+                self._curve,
+                self._ql_interpolation_algo,
+                query,
+                self._fixings,
+            )
+            for cache_key, ref_date, ql_curve_nodes, query in tasks_iter
+        )
+
+        for ck, row in new_results:
+            self._irswaps_timeseries_cache[ck] = row
+        if new_results:
+            self.zodb_commit()
+
+        all_rows = cached_rows + [row for _, row in new_results]
+        if not all_rows:
+            return pd.DataFrame([], index=pd.DatetimeIndex([]))
+
+        rows_df = pd.DataFrame(all_rows, columns=[self._date_col, "col", "val"])
+        rows_df = rows_df.drop_duplicates(subset=[self._date_col, "col"], keep="last")
+        df = rows_df.pivot(index=self._date_col, columns="col", values="val").sort_index()
+        df.columns.name = None
+        try:
+            df.index = df.index.tz_convert(self._DEFAULT_TZ)
+        except Exception as e:
+            self._logger.error(f"'timeseries_builder' failed to convert to {self._DEFAULT_TZ}: {e}")
+
+        self.close_zodb()
+        return df
 
     def _build_fwd_irswaps_term_structure_grid_timeseries(
         self,
@@ -511,58 +578,17 @@ class IRSwaps(BaseProductPlotter):
         fwd_term_structure_grids = {curr_date: df for curr_date, df in results}
         return fwd_term_structure_grids
 
-    def irswaps_data_grid_builder(
-        self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        bdates: Optional[List[datetime]] = None,
-        fwd_tenors: Optional[List[str]] = None,
-        irswap_tenors: Optional[List[str]] = None,
-        irswap_value: Optional[IRSwapValue] = IRSwapValue.RATE,
-        to_pydt: Optional[bool] = False,
-        n_jobs: Optional[int] = 1,
-    ):
-        fwd_tenors = self._default_fwd_irswap_tenors if not fwd_tenors else fwd_tenors
-        irswap_tenors = self._default_underlying_tenors if not irswap_tenors else irswap_tenors
-        return self._build_fwd_irswaps_term_structure_grid_timeseries(
-            ql_curves_ts_dict=self.fetch_ql_irswap_curves(start_date=start_date, end_date=end_date, bdates=bdates, to_pydt=to_pydt),
-            fwd_tenors=fwd_tenors,
-            underlying_tenors=irswap_tenors,
-            irswap_value=irswap_value,
-            n_jobs=n_jobs,
-        )
-
-    def irswaps_term_structure_plotter(
-        self,
-        bdates: List[datetime],
-        use_plotly: Optional[bool] = False,
-        fwd_tenors: Optional[List[str]] = ["0D"],
-        irswap_tenors: Optional[List[str]] = None,
-        n_jobs: Optional[int] = 1,
-        return_data: Optional[bool] = False,
-    ):
-        irswap_tenors = self._default_underlying_tenors if not irswap_tenors else irswap_tenors
-        irswaps_term_structure_dict_df = self._build_fwd_irswaps_term_structure_grid_timeseries(
-            ql_curves_ts_dict=self.fetch_ql_irswap_curves(bdates=bdates), fwd_tenors=fwd_tenors, underlying_tenors=irswap_tenors, n_jobs=n_jobs
-        )
-        self._term_structure_plotter(
-            term_structure_dict_df=irswaps_term_structure_dict_df,
-            plot_title=f"{self._curve} Curve",
-            x_axis_col_sorter_func=lambda x: ql_period_to_days(ql.Period(x)),
-            x_axis_title="Term",
-            y_axis_title="Rate",
-            use_plotly=use_plotly,
-        )
-        if return_data:
-            return irswaps_term_structure_dict_df
-
 
 def _process_irswap_single_query_with_cache(
     cache_key: Tuple[datetime, Tuple],
     *args,
     **kwargs,
 ) -> Tuple[Tuple[datetime, Tuple], Tuple[datetime, str, float]]:
-    return cache_key, _process_irswap_single_query(*args, **kwargs)
+    try:
+        return cache_key, _process_irswap_single_query(*args, **kwargs)
+    except Exception as e:
+        # TODO handle errors
+        return cache_key, None
 
 
 def _process_irswap_single_query(
@@ -575,9 +601,8 @@ def _process_irswap_single_query(
 ) -> Tuple[datetime, str, float]:
     ql.Settings.instance().evaluationDate = datetime_to_ql_date(ref_date)
 
-    ql_curve = build_ql_discount_curve(
-        datetime_series=pd.Series(ql_curve_nodes.keys()),
-        discount_factor_series=pd.Series(ql_curve_nodes.values()),
+    ql_curve = build_discount_curve_from_nodes(
+        ql_curve_nodes=ql_curve_nodes,
         ql_dc=CME_IRSWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
         ql_cal=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
         interpolation_algo=f"df_{ql_interpolation_algo_str}",
@@ -615,9 +640,8 @@ def _process_irswap_queries(
     ql.Settings.instance().evaluationDate = datetime_to_ql_date(ref_date)
 
     row = {date_col: ref_date}
-    ql_curve = build_ql_discount_curve(
-        datetime_series=pd.Series(ql_curve_nodes.keys()),
-        discount_factor_series=pd.Series(ql_curve_nodes.values()),
+    ql_curve = build_discount_curve_from_nodes(
+        ql_curve_nodes=ql_curve_nodes,
         ql_dc=CME_IRSWAP_CURVE_QL_PARAMS[curve]["dayCounter"],
         ql_cal=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
         interpolation_algo=f"df_{ql_interpolation_algo_str}",

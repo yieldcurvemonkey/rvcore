@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Literal, Optional, Dict
+from typing import List, Literal, Optional, Dict, Annotated
 
 import numpy as np
 import pandas as pd
@@ -33,8 +33,8 @@ def build_ql_discount_curve(
         "df_kruger_log": ql.KrugerLogDiscountCurve,
         "df_natural_log_cubic": ql.NaturalLogCubicDiscountCurve,
         "df_log_mixed_linear": ql.LogMixedLinearCubicDiscountCurve,
-        # "df_log_parabolic_cubic": ql.LogParabolicCubicDiscountCurve,
-        # "df_mono_log_parabolic_cubic": ql.MonotonicLogParabolicCubicDiscountCurve,
+        "df_log_parabolic_cubic": ql.LogParabolicCubicDiscountCurve,
+        "df_mono_log_parabolic_cubic": ql.MonotonicLogParabolicCubicDiscountCurve,
     }
     try:
         curve_class = curve_mapping[interpolation_algo]
@@ -73,9 +73,9 @@ def build_piecewise_ql_discount_curve(
         "pdf_kruger_log": ql.PiecewiseKrugerLogDiscount,
         "pdf_natural_log_cubic": ql.PiecewiseNaturalLogCubicDiscount,
         "pdf_log_mixed_linear": ql.PiecewiseLogMixedLinearCubicDiscount,
-        # "pdf_log_parabolic_cubic": ql.PiecewiseLogParabolicCubicDiscount,
+        "pdf_log_parabolic_cubic": ql.PiecewiseLogParabolicCubicDiscount,
         "pdf_spline_cubic_discount": ql.PiecewiseSplineCubicDiscount,
-        # "pdf_mono_log_parabolic_cubic": ql.PiecewiseMonotonicLogParabolicCubicDiscount,
+        "pdf_mono_log_parabolic_cubic": ql.PiecewiseMonotonicLogParabolicCubicDiscount,
     }
     try:
         curve_class = curve_mapping[interpolation_algo]
@@ -112,8 +112,8 @@ def build_ql_zero_curve(
         "z_log_cubic": ql.LogCubicZeroCurve,
         "z_monotonic_cubic": ql.MonotonicCubicZeroCurve,
         "z_kruger": ql.KrugerZeroCurve,
-        # "z_parabolic_cubic": ql.ParabolicCubicZeroCurve,
-        # "z_monotonic_parabolic_cubic": ql.MonotonicParabolicCubicZeroCurve,
+        "z_parabolic_cubic": ql.ParabolicCubicZeroCurve,
+        "z_monotonic_parabolic_cubic": ql.MonotonicParabolicCubicZeroCurve,
     }
     try:
         curve_class = curve_mapping[interpolation_algo]
@@ -136,7 +136,9 @@ def extract_fitted_curve_nodes(fitted_curve: ql.YieldTermStructure, num_points: 
 
 
 def get_nodes_dict(
-    ql_curve: ql.YieldTermStructure | ql.DiscountCurve | ql.PiecewiseLogLinearDiscount | ql.FittedBondDiscountCurve, to_ttm: Optional[bool] = False
+    ql_curve: ql.YieldTermStructure | ql.DiscountCurve | ql.PiecewiseLogLinearDiscount | ql.FittedBondDiscountCurve,
+    to_ttm: Optional[bool] = False,
+    to_iso: Optional[bool] = False,
 ) -> Dict[datetime, float]:
     if hasattr(ql_curve, "nodes"):
         nodes = ql_curve.nodes()
@@ -149,10 +151,36 @@ def get_nodes_dict(
         ref_date: ql.Date = ql_curve.referenceDate()
         day_counter: ql.DayCounter = ql_curve.dayCounter()
         nodes_dict = {day_counter.yearFraction(ref_date, node[0]): node[1] for node in nodes}
+    elif to_iso:
+        nodes_dict = {ql_date_to_datetime(node[0]).isoformat(): node[1] for node in nodes}
     else:
         nodes_dict = {ql_date_to_datetime(node[0]): node[1] for node in nodes}
 
     return nodes_dict
+
+
+def build_discount_curve_from_nodes(
+    ql_curve_nodes: Dict[datetime | Annotated[str, "isoformat"], float], ql_dc: ql.DayCounter, ql_cal: ql.Calendar, interpolation_algo: str
+):
+    dates = []
+    for k in ql_curve_nodes.keys():
+        if isinstance(k, datetime):
+            dates.append(k)
+        elif isinstance(k, str):
+            try:
+                dates.append(pd.Timestamp(k))
+            except Exception as e:
+                raise ValueError(f"Bad date string {k!r}: {e}") from None
+        else:
+            raise TypeError(f"Unsupported key type {type(k)}: {k!r}")
+
+    return build_ql_discount_curve(
+        datetime_series=pd.Series(dates),
+        discount_factor_series=pd.Series(ql_curve_nodes.values()),
+        ql_dc=ql_dc,
+        ql_cal=ql_cal,
+        interpolation_algo=interpolation_algo,
+    )
 
 
 def get_fixings_dict(swap_index: ql.SwapIndex) -> Dict[datetime, float]:

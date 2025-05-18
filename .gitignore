@@ -51,6 +51,12 @@ docs/_build/
 
 .env
 
+# cache
+*.fs
+*.fs.index
+*.fs.lock
+*.fs.tmp
+
 temp.py
 temp2.py
 temp.ipynb
