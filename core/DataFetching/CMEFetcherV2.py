@@ -85,6 +85,7 @@ class CMEFetcherV2(BaseFetcher):
         type: Literal["Zero", "Df"],
         ql_day_count: ql.DayCounter,
         ql_calendar: ql.Calendar,
+        date_col: Optional[str] = "Date",
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         bdates: Optional[List[datetime]] = None,
@@ -163,39 +164,44 @@ class CMEFetcherV2(BaseFetcher):
                 else cme_eod_curve_reports_dict_df.items()
             )
             for curve_date, curve_report_df in curve_iter:
+                curve_report_df.columns = [x.lower() if x != date_col else x for x in curve_report_df.columns]
+
                 try:
-                    curve_report_df = curve_report_df[curve_report_df["Curve Name"] == curve]
+                    curve_report_df = curve_report_df[curve_report_df["curve name"] == curve]
                     if curve_report_df.empty:
                         ql_curves_dict[curve_date] = None
                         self._logger.error(f"No data from {curve} on {curve_date}")
                         continue
 
-                    curve_report_df["Date"] = pd.to_datetime(curve_report_df["Date"], format="%m/%d/%Y", errors="coerce")
-                    curve_report_df = curve_report_df.sort_values(by=["Date"])
+                    curve_report_df[date_col] = pd.to_datetime(curve_report_df[date_col], format="%m/%d/%Y", errors="coerce")
+                    curve_report_df = curve_report_df.sort_values(by=[date_col])
+                    curve_report_df[type.lower()] = pd.to_numeric(curve_report_df[type.lower()], errors="coerce")
 
-                    if type == "Df" and type not in curve_report_df.columns:
-                        type = "DF"
-                    curve_report_df[type] = pd.to_numeric(curve_report_df[type], errors="coerce")
+                    datetime_series = curve_report_df[date_col].reset_index(drop=True).copy()
+                    type_series = curve_report_df[type.lower()].reset_index(drop=True).copy()
 
-                    datetime_series = curve_report_df["Date"].reset_index(drop=True).copy()
-                    type_series = curve_report_df[type].reset_index(drop=True).copy()
-
-                    #  QuantLib: the first discount must be == 1.0 to flag the corresponding date as reference date
-                    if not curve_date in datetime_series and type in ["Df", "DF"]:
+                    if not curve_date in datetime_series and type.lower() == "df":
                         datetime_series = pd.concat([pd.Series([curve_date]), datetime_series])
                         type_series = pd.concat([pd.Series([1]), type_series])
 
-                    ql_curve_build_func = build_ql_discount_curve if type in ["Df", "DF"] else build_ql_zero_curve
+                    if type.lower() == "df":
+                        ql_curve_build_func = build_ql_discount_curve
+                        interp_prefix = "df"
+                    else:
+                        ql_curve_build_func = build_ql_zero_curve
+                        interp_prefix = "z"
+
                     ql_curve = ql_curve_build_func(
                         datetime_series,
                         type_series,
                         ql_day_count,
                         ql_calendar,
-                        f"df_{interpolation_algo}" if type in ["Df", "DF"] else f"z_{interpolation_algo}",
+                        f"{interp_prefix}_{interpolation_algo}",
                     )
                     if enable_extrapolation:
                         ql_curve.enableExtrapolation()
 
+                    # CME Curve Report release
                     naive_close = datetime(curve_date.year, curve_date.month, curve_date.day, 17, 0, 0)
                     ny_tz = pytz.timezone("US/Eastern")
                     curve_date_ny_close = ny_tz.localize(naive_close)

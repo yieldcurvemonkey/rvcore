@@ -22,7 +22,8 @@ class CodecMapping(MutableMapping):
         return self._dec(self._b[k])
 
     def __setitem__(self, k, v):
-        self._b[k] = self._enc(v)
+        if k and v:
+            self._b[k] = self._enc(v)
 
     def __delitem__(self, k):
         del self._b[k]

@@ -19,6 +19,7 @@ from dateutil.relativedelta import relativedelta
 
 from core.DataFetching.BaseFetcher import BaseFetcher
 from core.CurveBuilding.IRSwaps.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
+from core.Caching.ZODBCacheMixin import ZODBCacheMixin
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -34,7 +35,7 @@ def is_business_day(date: pd.Timestamp | datetime):
     return bool(len(pd.bdate_range(date, date)))
 
 
-class CMEFetcher(BaseFetcher):
+class CMEFetcher(BaseFetcher, ZODBCacheMixin):
     _base_cme_ftp_url = "https://www.cmegroup.com/ftp"
     _base_cme_ftp_headers = {
         "authority": "www.cmegroup.com",
@@ -55,7 +56,7 @@ class CMEFetcher(BaseFetcher):
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
     }
 
-    _curve_report_cache: Dict[datetime, pd.DataFrame] = {}
+    # _curve_report_cache: Dict[datetime, pd.DataFrame] = {}
 
     def __init__(
         self,
@@ -66,13 +67,25 @@ class CMEFetcher(BaseFetcher):
         warning_verbose: Optional[bool] = False,
         error_verbose: Optional[bool] = False,
     ):
-        super().__init__(
+        BaseFetcher.__init__(
+            self,
             global_timeout=global_timeout,
             proxies=proxies,
             debug_verbose=debug_verbose,
             info_verbose=info_verbose,
             warning_verbose=warning_verbose,
             error_verbose=error_verbose,
+        )
+        ZODBCacheMixin.__init__(self)
+        self._ensure_cache()
+
+    def _ensure_cache(self):
+        cache_path = ZODBCacheMixin.default_cache_path("CMEFetcher_curve_reports")
+        self.zodb_open_cache(
+            cache_attr="_curve_report_cache",
+            path=cache_path,
+            encode=None,
+            decode=None,
         )
 
     def _build_cme_ftp_request_headers(
@@ -216,13 +229,23 @@ class CMEFetcher(BaseFetcher):
 
     def _partition_cached_dates(self, dates: List[datetime]) -> Tuple[Dict[datetime, pd.DataFrame], List[datetime]]:
         cached, missing = {}, []
-        cache = CMEFetcher._curve_report_cache
+        cache = self._curve_report_cache
         for d in dates:
             if d in cache:
                 cached[d] = cache[d]
             else:
                 missing.append(d)
         return cached, missing
+
+    async def _fetch_and_store(self, client: httpx.AsyncClient, curve_date: datetime) -> None:
+        buf = await self._fetch_cme_ftp_eod_curve_report_helper(client, curve_date)
+        if buf:
+            url, _, _ = self._build_eod_curve_report_path(curve_date)
+            file_name = url.split("/")[-1]
+            key, df = self._read_single_file(buf.getvalue(), file_name, convert_key_into_dt=True)
+            if key and df is not None:
+                self._curve_report_cache[key] = df
+                self.zodb_commit()
 
     def fetch_curve_reports(
         self,
@@ -233,44 +256,38 @@ class CMEFetcher(BaseFetcher):
         max_connections: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
     ) -> Dict[datetime, pd.DataFrame]:
+        self._ensure_cache()
+        dates = bdates or pd.date_range(start_date, end_date, freq="B").to_pydatetime().tolist()
 
-        async def async_wrapper_fetch_curve_reports(
-            start_date: Optional[datetime] = None,
-            end_date: Optional[datetime] = None,
-            bdates: Optional[List[datetime]] = None,
-        ):
-            dates = bdates or pd.date_range(start_date, end_date, freq="B").to_pydatetime().tolist()
+        cached_part, to_fetch = self._partition_cached_dates(dates)
+        results = dict(cached_part)
 
-            cached_part, dates_to_fetch = self._partition_cached_dates(dates)
-            results: Dict[datetime, pd.DataFrame] = dict(cached_part)
+        if to_fetch:
+            limits = httpx.Limits(
+                max_connections=max_connections,
+                max_keepalive_connections=max_keepalive_connections,
+            )
 
-            async def _fetch_report_for_date(client: httpx.AsyncClient, curve_date: datetime) -> Tuple[datetime, Optional[BytesIO]]:
-                buf = await self._fetch_cme_ftp_eod_curve_report_helper(client, curve_date)
-                return curve_date, buf
+            async def runner():
+                async with httpx.AsyncClient(
+                    limits=limits,
+                    timeout=self._global_timeout,
+                    mounts=self._httpx_proxies,
+                    verify=False,
+                    http2=True,
+                ) as client:
+                    tasks = [self._fetch_and_store(client, d) for d in to_fetch]
+                    for coro in tqdm.tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Fetching Reports") if show_tqdm else asyncio.as_completed(tasks):
+                        await coro
 
-            if dates_to_fetch:
-                limits = httpx.Limits(
-                    max_connections=max_connections,
-                    max_keepalive_connections=max_keepalive_connections,
-                )
-                async with httpx.AsyncClient(limits=limits, timeout=self._global_timeout, mounts=self._httpx_proxies, verify=False, http2=True) as client:
-                    tasks = [_fetch_report_for_date(client, d) for d in dates_to_fetch]
-                    future_iter = (
-                        tqdm.tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Fetching Curve Reports") if show_tqdm else asyncio.as_completed(tasks)
-                    )
-                    for future in future_iter:
-                        curve_date, buf = await future
-                        if buf is not None:
-                            url, _, _ = self._build_eod_curve_report_path(curve_date)
-                            file_name = url.split("/")[-1]
-                            key, df = self._read_single_file(buf.getvalue(), file_name, convert_key_into_dt=True)
-                            if key is not None and df is not None:
-                                results[key] = df
-                                CMEFetcher._curve_report_cache[key] = df
+            asyncio.run(runner())
 
-            return results
+            for d in to_fetch:
+                if d in self._curve_report_cache:
+                    results[d] = self._curve_report_cache[d]
 
-        return asyncio.run(async_wrapper_fetch_curve_reports(start_date, end_date, bdates))
+        self.close_zodb()
+        return results
 
     def build_ql_eod_curves(
         self,
@@ -294,6 +311,7 @@ class CMEFetcher(BaseFetcher):
         type: Literal["Zero", "Df"],
         ql_day_count: ql.DayCounter,
         ql_calendar: ql.Calendar,
+        date_col: Optional[str] = "Date",
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         bdates: Optional[List[datetime]] = None,
@@ -322,7 +340,7 @@ class CMEFetcher(BaseFetcher):
         show_tqdm: Optional[bool] = False,
         max_connections: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
-    ) -> Dict[datetime, ql.YieldTermStructure]:
+    ) -> Dict[datetime, ql.DiscountCurve | ql.ZeroCurve]:
         assert (start_date and end_date) or bdates, "Must Pass in 'start_date' and 'end_date' or 'bdates'"
 
         cme_eod_curve_reports_dict_df = self.fetch_curve_reports(
@@ -334,36 +352,34 @@ class CMEFetcher(BaseFetcher):
             max_keepalive_connections=max_keepalive_connections,
         )
 
-        ql_curves_dict: Dict[datetime, ql.YieldTermStructure] = {}
+        ql_curves_dict: Dict[datetime, ql.DiscountCurve | ql.ZeroCurve] = {}
         curve_iter = (
-            tqdm.tqdm(cme_eod_curve_reports_dict_df.items(), desc=f"BUILDING {curve} {"DISCOUNT" if type == "Df" else "ZERO"} CURVES..")
+            tqdm.tqdm(cme_eod_curve_reports_dict_df.items(), desc=f"BUILDING {curve} {"DISCOUNT" if type.lower() == "df" else "ZERO"} CURVES..")
             if show_tqdm
             else cme_eod_curve_reports_dict_df.items()
         )
         for curve_date, curve_report_df in curve_iter:
+            curve_report_df.columns = [x.lower() for x in curve_report_df.columns]
+
             try:
-                curve_report_df = curve_report_df[curve_report_df["Curve Name"] == curve]
+                curve_report_df = curve_report_df[curve_report_df["curve name"] == curve]
                 if curve_report_df.empty:
                     ql_curves_dict[curve_date] = None
                     self._logger.error(f"No data from {curve} on {curve_date}")
                     continue
 
-                curve_report_df["Date"] = pd.to_datetime(curve_report_df["Date"], format="%m/%d/%Y", errors="coerce")
-                curve_report_df = curve_report_df.sort_values(by=["Date"])
+                curve_report_df[date_col] = pd.to_datetime(curve_report_df[date_col], format="%m/%d/%Y", errors="coerce")
+                curve_report_df = curve_report_df.sort_values(by=[date_col])
+                curve_report_df[type.lower()] = pd.to_numeric(curve_report_df[type.lower()], errors="coerce")
 
-                if type == "Df" and type not in curve_report_df.columns:
-                    type = "DF"
-                curve_report_df[type] = pd.to_numeric(curve_report_df[type], errors="coerce")
+                datetime_series = curve_report_df[date_col].reset_index(drop=True).copy()
+                type_series = curve_report_df[type.lower()].reset_index(drop=True).copy()
 
-                datetime_series = curve_report_df["Date"].reset_index(drop=True).copy()
-                type_series = curve_report_df[type].reset_index(drop=True).copy()
-
-                #  QuantLib: the first discount must be == 1.0 to flag the corresponding date as reference date
-                if not curve_date in datetime_series and type in ["Df", "DF"]:
+                if not curve_date in datetime_series and type.lower() == "df":
                     datetime_series = pd.concat([pd.Series([curve_date]), datetime_series])
                     type_series = pd.concat([pd.Series([1]), type_series])
 
-                ql_curve_build_func = build_ql_discount_curve if type in ["Df", "DF"] else build_ql_zero_curve
+                ql_curve_build_func = build_ql_discount_curve if type.lower() == "df" else build_ql_zero_curve
                 ql_curve = ql_curve_build_func(
                     datetime_series,
                     type_series,
@@ -376,6 +392,6 @@ class CMEFetcher(BaseFetcher):
 
                 ql_curves_dict[curve_date] = ql_curve
             except Exception as e:
-                self._logger.error(f"Error when building Quantlib Curve for {curve} on {curve_date}: {e}")
+                self._logger.error(f"Error when building Quantlib Curve for CME {curve} on {curve_date}: {e}")
 
         return ql_curves_dict

@@ -160,6 +160,7 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
                         "Df",
                         self._ql_day_count,
                         self._ql_calendar,
+                        self._date_col,
                         None,
                         None,
                         self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES,
@@ -377,11 +378,13 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
         queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper | Tuple[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper, str]],
         return_all: Optional[bool] = False,
         n_jobs: Optional[int] = 1,
+        ignore_cache: Optional[False] = False
     ) -> pd.DataFrame:
         ts_df = self._build_fwd_irswaps_timeseries(
             ql_curves_ts_dict=self.fetch_ql_irswap_curves(start_date=start_date, end_date=end_date),
             queries=queries,
             n_jobs=n_jobs,
+            ignore_cache=ignore_cache
         )
         if ts_df.empty:
             raise ValueError("'irswaps_timeseries_builder': Dataframe is empty")
@@ -483,7 +486,8 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
         self,
         ql_curves_ts_dict: Dict[datetime, ql.DiscountCurve],
         queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
-        n_jobs: int = 1,
+        n_jobs: Optional[int] = 1,
+        ignore_cache: Optional[False] = False 
     ) -> pd.DataFrame:
         self._ensure_cache(self._IRSWAPS_TIMESERIES_CACHE)
 
@@ -504,7 +508,7 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
             for query in flat_queries:
                 q_key = _query_to_key(query)
                 cache_key = (ref_date, q_key)
-                if cache_key in self._irswaps_timeseries_cache:
+                if cache_key in self._irswaps_timeseries_cache and not ignore_cache:
                     cached_rows.append(self._irswaps_timeseries_cache[cache_key])
                 else:
                     tasks.append((cache_key, ref_date, ql_curve_nodes, query))

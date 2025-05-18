@@ -3,24 +3,16 @@ import sys
 sys.path.append("../../")
 
 import os
-import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Optional
 
 import pandas as pd
 import pytz
-import schedule
-from sqlalchemy import Engine, create_engine, inspect, text
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy_utils import create_database, database_exists, drop_database
 from termcolor import termcolor
 
-from core.IRSwaps import IRSwaps, IRSwapQuery, IRSwapValue, IRSwapStructure, IRSwapStructureFunctionMap, IRSwapValueFunctionMap
-from core.IRSwaptions import IRSwaptions, IRSwaptionQuery, IRSwaptionValue, IRSwaptionStructure, IRSwaptionStructureFunctionMap, IRSwaptionValueFunctionMap
-from core.DataFetching.FixingsFetcher import FixingsFetcher
-from core.utils.ql_utils import ql_date_to_datetime, datetime_to_ql_date
+from core.IRSwaps import IRSwaps, IRSwapQuery, IRSwapStructure
 
-valid_clas = ["update_csv"]
+valid_clas = ["update_csv", "populate_cache"]
 
 if len(sys.argv) < 2:
     print(f"Usage: python update_usd_ois.py {valid_clas}")
@@ -38,7 +30,7 @@ chi_today = datetime(year=chi_now.year, month=chi_now.month, day=chi_now.day)
 CURVE = "USD-SOFR-1D"
 INTERPOLATION = "log_linear"
 USD_OIS_CSV_PATH = f"{os.path.join(os.getcwd(), "..", "usd_ois.csv")}"
-DATE_COL = "Date" 
+DATE_COL = "Date"
 PAR_TENORS = [
     "1D",
     "1W",
@@ -100,7 +92,7 @@ def update_csv():
     usd_ois_cme = IRSwaps(
         curve=CURVE,
         data_source="CME",
-        ql_interpolation_algo="log_linear",
+        ql_interpolation_algo=INTERPOLATION,
         error_verbose=True,
         max_njobs=-1,
     )
@@ -137,8 +129,39 @@ def update_csv():
         sys.exit(1)
 
 
+def populate_cache(populate_timeseries_days: Optional[int] = 365):
+    usd_ois = IRSwaps(
+        curve=CURVE,
+        data_source=f"CSV_{USD_OIS_CSV_PATH}",
+        ql_interpolation_algo=INTERPOLATION,
+        error_verbose=True,
+        max_njobs=-1,
+    )
+
+    curr_usd_ois_df = pd.read_csv(USD_OIS_CSV_PATH)
+    curr_date_in_csv = curr_usd_ois_df.iloc[-1].name
+    end_date = datetime(curr_date_in_csv.year, curr_date_in_csv.month, curr_date_in_csv.day)
+    usd_ois.fetch_ql_irswap_curves(start_date=datetime(2000, 1, 1), end_date=end_date)
+
+    qs = []
+    for f in usd_ois._DEFAULT_FWD_TENORS:
+        for u in usd_ois._DEFAULT_UNDERLYING_TENORS:
+            qs.append(IRSwapQuery(tenor=f"{f}x{u}" if f != "0D" else u, structure=IRSwapStructure.OUTRIGHT))
+
+    usd_ois.irswaps_timeseries_builder(
+        start_date=end_date - timedelta(days=populate_timeseries_days),
+        end_date=end_date,
+        queries=qs,
+        n_jobs=-1,
+    )
+
+
 if __name__ == "__main__":
 
     if mode in ["update_csv"]:
+        update_csv()
+        sys.exit(0)
+
+    if mode in ["populate_cache"]:
         update_csv()
         sys.exit(0)

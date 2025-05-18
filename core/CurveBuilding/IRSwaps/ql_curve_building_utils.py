@@ -140,47 +140,55 @@ def get_nodes_dict(
     to_ttm: Optional[bool] = False,
     to_iso: Optional[bool] = False,
 ) -> Dict[datetime, float]:
-    if hasattr(ql_curve, "nodes"):
-        nodes = ql_curve.nodes()
-    elif hasattr(ql_curve, "dates") and hasattr(ql_curve, "discounts"):
-        nodes = list(zip(ql_curve.dates(), ql_curve.discounts()))
-    else:
-        return extract_fitted_curve_nodes(fitted_curve=ql_curve)
+    try:
+        if hasattr(ql_curve, "nodes"):
+            nodes = ql_curve.nodes()
+        elif hasattr(ql_curve, "dates") and hasattr(ql_curve, "discounts"):
+            nodes = list(zip(ql_curve.dates(), ql_curve.discounts()))
+        else:
+            return extract_fitted_curve_nodes(fitted_curve=ql_curve)
 
-    if to_ttm:
-        ref_date: ql.Date = ql_curve.referenceDate()
-        day_counter: ql.DayCounter = ql_curve.dayCounter()
-        nodes_dict = {day_counter.yearFraction(ref_date, node[0]): node[1] for node in nodes}
-    elif to_iso:
-        nodes_dict = {ql_date_to_datetime(node[0]).isoformat(): node[1] for node in nodes}
-    else:
-        nodes_dict = {ql_date_to_datetime(node[0]): node[1] for node in nodes}
+        if to_ttm:
+            ref_date: ql.Date = ql_curve.referenceDate()
+            day_counter: ql.DayCounter = ql_curve.dayCounter()
+            nodes_dict = {day_counter.yearFraction(ref_date, node[0]): node[1] for node in nodes}
+        elif to_iso:
+            nodes_dict = {ql_date_to_datetime(node[0]).isoformat(): node[1] for node in nodes}
+        else:
+            nodes_dict = {ql_date_to_datetime(node[0]): node[1] for node in nodes}
 
-    return nodes_dict
+        return nodes_dict
+    except Exception as e:
+        print(f"Couldn't Extract Curve Nodes: {e}")
+        return None
 
 
 def build_discount_curve_from_nodes(
     ql_curve_nodes: Dict[datetime | Annotated[str, "isoformat"], float], ql_dc: ql.DayCounter, ql_cal: ql.Calendar, interpolation_algo: str
 ):
-    dates = []
-    for k in ql_curve_nodes.keys():
-        if isinstance(k, datetime):
-            dates.append(k)
-        elif isinstance(k, str):
-            try:
-                dates.append(pd.Timestamp(k))
-            except Exception as e:
-                raise ValueError(f"Bad date string {k!r}: {e}") from None
-        else:
-            raise TypeError(f"Unsupported key type {type(k)}: {k!r}")
+    try:
+        dates = []
+        for k in ql_curve_nodes.keys():
+            if isinstance(k, datetime):
+                dates.append(k)
+            elif isinstance(k, str):
+                try:
+                    dates.append(pd.Timestamp(k))
+                except Exception as e:
+                    raise ValueError(f"Bad date string {k!r}: {e}") from None
+            else:
+                raise TypeError(f"Unsupported key type {type(k)}: {k!r}")
 
-    return build_ql_discount_curve(
-        datetime_series=pd.Series(dates),
-        discount_factor_series=pd.Series(ql_curve_nodes.values()),
-        ql_dc=ql_dc,
-        ql_cal=ql_cal,
-        interpolation_algo=interpolation_algo,
-    )
+        return build_ql_discount_curve(
+            datetime_series=pd.Series(dates),
+            discount_factor_series=pd.Series(ql_curve_nodes.values()),
+            ql_dc=ql_dc,
+            ql_cal=ql_cal,
+            interpolation_algo=interpolation_algo,
+        )
+    except Exception as e:
+        print(f"Couldn't Build Curve: {e}")
+        return None
 
 
 def get_fixings_dict(swap_index: ql.SwapIndex) -> Dict[datetime, float]:
