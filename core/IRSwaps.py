@@ -7,11 +7,13 @@ import numpy as np
 import pandas as pd
 import tqdm
 from joblib import Parallel, delayed
+from sqlalchemy import Engine
 
 from core.Caching.ZODBCacheMixin import ZODBCacheMixin
 
 from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
 from core.CurveBuilding.IRSwaps.IRSwapCurveBootstrapper import IRSwapCurveBootstrapper
+from core.CurveBuilding.IRSwaps.IRSwapCurveBootstrapperAlchemyWrapper import IRSwapCurveBootstrapperAlchemyWrapper
 from core.CurveBuilding.IRSwaps.ql_curve_building_utils import build_discount_curve_from_nodes, get_nodes_dict
 
 from core.DataFetching.CMEFetcherV2 import CMEFetcherV2
@@ -54,7 +56,7 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
 
     def __init__(
         self,
-        data_source: Literal["CME", "CSV_{path}"],
+        data_source: Literal["CME", "CSV_{path}"] | Engine,
         curve: Literal[
             "USD-SOFR-1D",
             "USD-FEDFUNDS",
@@ -87,36 +89,6 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
             ]
         ] = "log_linear",
         date_col: Optional[str] = "Date",
-        bootstrap_cols: Optional[List[str]] = [
-            "1M",
-            "2M",
-            "3M",
-            "4M",
-            "5M",
-            "6M",
-            "7M",
-            "8M",
-            "9M",
-            "10M",
-            "11M",
-            "12M",
-            "18M",
-            "2Y",
-            "3Y",
-            "4Y",
-            "5Y",
-            "6Y",
-            "7Y",
-            "8Y",
-            "9Y",
-            "10Y",
-            "15Y",
-            "20Y",
-            "25Y",
-            "30Y",
-            "40Y",
-            "50Y",
-        ],
         pre_fetch_curves: Optional[bool] = False,
         max_njobs: Optional[int] = 1,
         show_tqdm: Optional[bool] = True,
@@ -136,14 +108,19 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
         ZODBCacheMixin.__init__(self)
 
         self._date_col = date_col
-        if "CSV_" in data_source:
-            csv_df = pd.read_csv(data_source.split("_", 1)[-1])
-            csv_df[self._date_col] = pd.to_datetime(csv_df[self._date_col], errors="coerce", format="mixed")
-            self._irswaps_hist_timeseries_csv_df = csv_df.set_index(self._date_col)
-            self._data_source = "CSV"
+        self._irswaps_db_engine = None
+        if not isinstance(data_source, str):
+            self._irswaps_db_engine = data_source
+            self._data_source = "ENGINE"
         else:
-            self._irswaps_hist_timeseries_csv_df = None
-            self._data_source = data_source
+            if "CSV_" in data_source:
+                csv_df = pd.read_csv(data_source.split("_", 1)[-1])
+                csv_df[self._date_col] = pd.to_datetime(csv_df[self._date_col], errors="coerce", format="mixed")
+                self._irswaps_hist_timeseries_csv_df = csv_df.set_index(self._date_col)
+                self._data_source = "CSV"
+            else:
+                self._irswaps_hist_timeseries_csv_df = None
+                self._data_source = data_source
 
         self._curve = curve
         self._fixings = fixings
@@ -152,7 +129,6 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
         self._ql_bday_convention = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["businessConvention"]
         self._DEFAULT_UNDERLYING_TENORS = CME_IRSWAP_CURVE_QL_PARAMS[self._curve]["default_tenors"]
         self._ql_interpolation_algo = ql_interpolation_algo
-        self._bootstrap_cols = bootstrap_cols
 
         self._pre_fetch_curves = pre_fetch_curves
         self._MAX_NJOBS = max_njobs
@@ -208,6 +184,23 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
                         self._show_tqdm,
                         self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE,
                         self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS,
+                    ),
+                },
+                "ENGINE": {
+                    self._DEFAULT_DSF_OBJ: IRSwapCurveBootstrapperAlchemyWrapper,
+                    self._DEFAULT_DSF_OBJ_ARGS: (self._irswaps_db_engine, self._date_col),
+                    self._DEFAULT_DFS_FETCH_FUNC: "ql_irswap_curve_bootstrap_wrapper",
+                    self._DEFAULT_DFS_FETCH_FUNC_ARGS: (
+                        self._curve,
+                        None,
+                        None,
+                        self._IRSWAP_CURVE_FETCH_FUNC_INPUT_DATES,
+                        self._ql_interpolation_algo,
+                        True,  # extrapolation
+                        self._show_tqdm,
+                        self._IRSWAP_CURVE_BOOTSTRAPPING_TQDM_MESSAGE,
+                        self._IRSWAP_CURVE_BOOTSTRAPPER_NJOBS,
+                        True,  # utc
                     ),
                 },
             }
