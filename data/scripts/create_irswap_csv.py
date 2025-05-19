@@ -14,10 +14,11 @@ from termcolor import termcolor
 from core.IRSwaps import IRSwaps, IRSwapQuery, IRSwapStructure
 from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
 
-CURVE = "GBP-SONIA" 
+CURVE = "USD-FEDFUNDS" 
 INTERPOLATION = "log_linear"
 PAR_TENORS = CME_IRSWAP_CURVE_QL_PARAMS[CURVE]["default_tenors"]
 CSV_PATH = f"{os.path.join(os.getcwd(), "..", f"{CURVE}_par_rates.csv")}"
+
 
 if __name__ == "__main__":
 

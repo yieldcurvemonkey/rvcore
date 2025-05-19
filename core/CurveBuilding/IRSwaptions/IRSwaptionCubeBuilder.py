@@ -76,72 +76,34 @@ class IRSwaptionCubeBuilder:
 
     def return_scube(
         self,
-        curve: str,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        bdates: Optional[List[datetime]] = None,
+        bdates: List[datetime],
     ) -> Dict[datetime, SCube]:
-        assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
-
-        between_bdates = (
-            get_bdates_between(
-                start_date=self.to_vanilla_pydt(start_date),
-                end_date=self.to_vanilla_pydt(end_date),
-                calendar=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
-            )
-            if (start_date and end_date)
-            else [self.to_vanilla_pydt(bday) for bday in bdates]
-        )
-        valid_group_dates = list(set.intersection(set(self._scube_timeseries.keys()), set(between_bdates)))
-
-        scubes_to_return: Dict[datetime, SCube] = {}
-        for dt in valid_group_dates:
+        scubes_to_return = {}
+        for dt in bdates:
             if dt in self._scube_timeseries:
                 scubes_to_return[dt] = self._scube_timeseries[dt]
-
         return scubes_to_return
 
     def return_sabr_params(
         self,
-        curve: str,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        bdates: Optional[List[datetime]] = None,
-    ) -> Dict[datetime, SCube]:
-        assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
-
-        between_bdates = (
-            get_bdates_between(
-                start_date=self.to_vanilla_pydt(start_date),
-                end_date=self.to_vanilla_pydt(end_date),
-                calendar=CME_IRSWAP_CURVE_QL_PARAMS[curve]["calendar"],
-            )
-            if (start_date and end_date)
-            else [self.to_vanilla_pydt(bday) for bday in bdates]
-        )
-        valid_group_dates = list(set.intersection(set(self._sabr_params_timeseries.keys()), set(between_bdates)))
-
+        bdates: List[datetime],
+    ) -> Dict[datetime, SABRParams]:
         sabr_params_to_return: Dict[datetime, SABRParams] = {}
-        for dt in valid_group_dates:
+        for dt in bdates:
             if dt in self._sabr_params_timeseries:
                 sabr_params_to_return[dt] = self._sabr_params_timeseries[dt]
-
         return sabr_params_to_return
 
     def parallel_ql_vol_cube_builder(
         self,
         curve: str,
         ql_discount_curves: Dict[datetime, ql.DiscountCurve],
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        bdates: Optional[List[datetime]] = None,
         use_sabr: Optional[bool] = False,
         precalibrate_cube: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
         tqdm_message: Optional[str] = None,
         n_jobs: Optional[int] = -1,
     ) -> Dict[datetime, ql.InterpolatedSwaptionVolatilityCube | ql.SabrSwaptionVolatilityCube]:
-        assert (start_date and end_date) or bdates, "MUST PASS IN ('start_date' and 'end_date') or 'bdates'"
 
         cached_cubes: Dict[datetime, ql.InterpolatedSwaptionVolatilityCube | ql.SabrSwaptionVolatilityCube] = {}
         dates_to_compute = []

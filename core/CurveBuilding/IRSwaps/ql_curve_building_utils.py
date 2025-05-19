@@ -43,8 +43,10 @@ def build_ql_discount_curve(
 
     ql_dates = datetime_series.apply(datetime_to_ql_date).to_list()
     discount_factors = discount_factor_series.to_list()
-
-    return curve_class(ql_dates, discount_factors, ql_dc, ql_cal)
+    
+    ql_curve: ql.DiscountCurve = curve_class(ql_dates, discount_factors, ql_dc, ql_cal)
+    ql_curve.enableExtrapolation()
+    return ql_curve 
 
 
 def build_piecewise_ql_discount_curve(
@@ -82,7 +84,9 @@ def build_piecewise_ql_discount_curve(
     except KeyError:
         raise ValueError(f"QuantLib has no discount curve with {interpolation_algo} interpolation")
 
-    return curve_class(settlement_day, ql_cal, swap_rate_helpers, ql_dc)
+    ql_curve: ql.DiscountCurve = curve_class(settlement_day, ql_cal, swap_rate_helpers, ql_dc)
+    ql_curve.enableExtrapolation()
+    return ql_curve 
 
 
 def build_ql_zero_curve(
@@ -122,7 +126,10 @@ def build_ql_zero_curve(
 
     ql_dates = datetime_series.apply(datetime_to_ql_date).to_list()
     rates = zero_rate_series.to_list()
-    return curve_class(ql_dates, rates, ql_dc, ql_cal)
+    
+    ql_curve: ql.ZeroCurve = curve_class(ql_dates, rates, ql_dc, ql_cal)
+    ql_curve.enableExtrapolation()
+    return ql_curve 
 
 
 def extract_fitted_curve_nodes(fitted_curve: ql.YieldTermStructure, num_points: Optional[int] = 250) -> Dict[datetime, float]:

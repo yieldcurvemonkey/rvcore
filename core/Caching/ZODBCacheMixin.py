@@ -16,9 +16,16 @@ DecodeFn = Callable[[Any], Any]
 
 
 class ZODBCacheMixin:
-    def __init__(self, use_btree: Optional[bool] = True, *args, **kwargs):
+    def __init__(
+        self,
+        *,
+        use_btree: Optional[bool] = True,
+        force_refresh: Optional[bool] = False,
+        **kwargs,
+    ):
         self._use_btree = use_btree
-        super().__init__(*args, **kwargs)
+        self._force_refresh = force_refresh
+        super().__init__(**kwargs)
         self._zconn_map: Dict[str, Tuple[DB, FileStorage.FileStorage]] = {}
         self._codec_wrappers: Dict[str, CodecMapping] = {}
 
@@ -47,9 +54,17 @@ class ZODBCacheMixin:
         path: str,
         encode: Optional[EncodeFn] = None,
         decode: Optional[DecodeFn] = None,
+        force: Optional[bool | None] = None,
     ) -> None:
-        if cache_attr in self._zconn_map:
+        force_now = self._force_refresh if force is None else force
+
+        if cache_attr in self._zconn_map and not force_now:
             return
+        elif cache_attr in self._zconn_map and force_now:
+            conn, stor = self._zconn_map.pop(cache_attr)
+            conn.close()
+            stor.close()
+            delattr(self, cache_attr)
 
         try:
             storage = FileStorage.FileStorage(path)
@@ -70,12 +85,13 @@ class ZODBCacheMixin:
             conn: Connection = db.open(transaction_manager=transaction.manager)
         except TypeError:
             conn: Connection = db.open(txn_manager=transaction.manager)
+
         # ensure a persistent transaction manager is attached
         conn.transaction_manager = transaction.manager
         root = conn.root()
 
-        if cache_attr not in root:
-            container = OOBTree() if getattr(self, "_use_btree", True) else PersistentMapping()
+        if cache_attr not in root or force_now:
+            container = OOBTree() if self._use_btree else PersistentMapping()
             root[cache_attr] = container
             transaction.commit()
 

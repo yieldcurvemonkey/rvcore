@@ -77,7 +77,6 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
             error_verbose=error_verbose,
         )
         ZODBCacheMixin.__init__(self)
-        self._ensure_cache()
 
     def _ensure_cache(self):
         cache_path = ZODBCacheMixin.default_cache_path("CMEFetcher_curve_reports")

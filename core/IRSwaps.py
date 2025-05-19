@@ -10,14 +10,14 @@ from joblib import Parallel, delayed
 from sqlalchemy import Engine
 
 from core.Caching.ZODBCacheMixin import ZODBCacheMixin
+from core.Plotting.BaseProductPlotter import BaseProductPlotter
+
+from core.DataFetching.CMEFetcherV2 import CMEFetcherV2
 
 from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
 from core.CurveBuilding.IRSwaps.IRSwapCurveBootstrapper import IRSwapCurveBootstrapper
 from core.CurveBuilding.IRSwaps.IRSwapCurveBootstrapperAlchemyWrapper import IRSwapCurveBootstrapperAlchemyWrapper
 from core.CurveBuilding.IRSwaps.ql_curve_building_utils import build_discount_curve_from_nodes, get_nodes_dict
-
-from core.DataFetching.CMEFetcherV2 import CMEFetcherV2
-from core.Plotting.BaseProductPlotter import BaseProductPlotter
 
 from core.TimeseriesBuilding.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper, IRSwapStructure, IRSwapValue
 from core.TimeseriesBuilding.IRSwaps.IRSwapStructure import IRSwapStructureFunctionMap
@@ -33,14 +33,15 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
     _DEFAULT_FWD_TENORS = ["0D", "01M", "03M", "06M", "09M", "01Y", "02Y", "03Y", "05Y", "10Y"]
     _DEFAULT_UNDERLYING_TENORS = None
 
-    _DEFAULT_DSF_KEY = "HIST_IRSWAPSF"
-    _DEFAULT_DSF_OBJ = "obj"
-    _DEFAULT_DSF_OBJ_ARGS = "init_args"
-    _DEFAULT_DFS_FETCH_FUNC = "fetch_func"
-    _DEFAULT_DFS_FETCH_FUNC_ARGS = "fetch_func_args"
+    _DEFAULT_DSF_KEY = "_DEFAULT_DSF_KEY"
+    _DEFAULT_DSF_OBJ = "_DEFAULT_DSF_OBJ"
+    _DEFAULT_DSF_OBJ_ARGS = "_DEFAULT_DSF_OBJ_ARGS"
+    _DEFAULT_DFS_FETCH_FUNC = "_DEFAULT_DFS_FETCH_FUNC"
+    _DEFAULT_DFS_FETCH_FUNC_ARGS = "_DEFAULT_DFS_FETCH_FUNC_ARGS"
 
     _DEFAULT_INTRADAY_BS_MESSAGE = "BOOTSTRAPPING INTRADAY IRSWAPS CURVE..."
     _DEFAULT_HIST_BS_MESSAGE = "BOOTSTRAPPING HISTORICAL IRSWAPS CURVE..."
+    _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS..."
 
     _IRSWAPS_QL_CURVE_CACHE = "_irswaps_ql_curve_cache"
     _IRSWAPS_TIMESERIES_CACHE = "_irswaps_timeseries_cache"
@@ -115,7 +116,7 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
         else:
             if "CSV_" in data_source:
                 csv_df = pd.read_csv(data_source.split("_", 1)[-1])
-                csv_df[self._date_col] = pd.to_datetime(csv_df[self._date_col], errors="coerce", format="mixed")
+                csv_df[self._date_col] = pd.to_datetime(csv_df[self._date_col], utc=True)
                 self._irswaps_hist_timeseries_csv_df = csv_df.set_index(self._date_col)
                 self._data_source = "CSV"
             else:
@@ -214,6 +215,24 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
             pre_fetch_end_date = most_recent_business_day_ql(ql_calendar=self._ql_calendar, tz=self._DEFAULT_TZ, to_pydate=True)
             pre_fetch_start_date = ql_date_to_datetime(self._ql_calendar.advance(datetime_to_ql_date(pre_fetch_end_date), self._DEFAULT_PRE_FETCH_CURVE_PERIOD))
             self.fetch_ql_irswap_curves(start_date=pre_fetch_start_date, end_date=pre_fetch_end_date)
+
+    def _cache_config(self) -> dict[str, dict]:
+        cache_ds_id = self._data_source if not self._data_source.startswith("CSV_") else f"CSV_{Path(self._data_source.split('_', 1)[-1]).stem}"
+        return {
+            self._IRSWAPS_QL_CURVE_CACHE: dict(
+                path=ZODBCacheMixin.default_cache_path(stem=f"{self._IRSWAPS_QL_CURVE_CACHE}_{cache_ds_id}_{self._curve}_{self._ql_interpolation_algo}"),
+                encode=partial(get_nodes_dict, to_iso=True),
+                decode=partial(
+                    build_discount_curve_from_nodes,
+                    ql_dc=self._ql_day_count,
+                    ql_cal=self._ql_calendar,
+                    interpolation_algo=f"df_{self._ql_interpolation_algo}",
+                ),
+            ),
+            self._IRSWAPS_TIMESERIES_CACHE: dict(
+                path=ZODBCacheMixin.default_cache_path(stem=f"{self._IRSWAPS_TIMESERIES_CACHE}_{cache_ds_id}_{self._curve}_{self._ql_interpolation_algo}"),
+            ),
+        }
 
     def _ensure_cache(self, attr: str):
         if hasattr(self, attr):
@@ -378,13 +397,10 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
         queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper | Tuple[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper, str]],
         return_all: Optional[bool] = False,
         n_jobs: Optional[int] = 1,
-        ignore_cache: Optional[False] = False
+        ignore_cache: Optional[False] = False,
     ) -> pd.DataFrame:
         ts_df = self._build_fwd_irswaps_timeseries(
-            ql_curves_ts_dict=self.fetch_ql_irswap_curves(start_date=start_date, end_date=end_date),
-            queries=queries,
-            n_jobs=n_jobs,
-            ignore_cache=ignore_cache
+            ql_curves_ts_dict=self.fetch_ql_irswap_curves(start_date=start_date, end_date=end_date), queries=queries, n_jobs=n_jobs, ignore_cache=ignore_cache
         )
         if ts_df.empty:
             raise ValueError("'irswaps_timeseries_builder': Dataframe is empty")
@@ -464,30 +480,12 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
         if return_data:
             return irswaps_term_structure_dict_df
 
-    def _cache_config(self) -> dict[str, dict]:
-        cache_ds_id = self._data_source if not self._data_source.startswith("CSV_") else f"CSV_{Path(self._data_source.split('_', 1)[-1]).stem}"
-        return {
-            self._IRSWAPS_QL_CURVE_CACHE: dict(
-                path=ZODBCacheMixin.default_cache_path(stem=f"{self._IRSWAPS_QL_CURVE_CACHE}_{cache_ds_id}_{self._curve}_{self._ql_interpolation_algo}"),
-                encode=partial(get_nodes_dict, to_iso=True),
-                decode=partial(
-                    build_discount_curve_from_nodes,
-                    ql_dc=self._ql_day_count,
-                    ql_cal=self._ql_calendar,
-                    interpolation_algo=f"df_{self._ql_interpolation_algo}",
-                ),
-            ),
-            self._IRSWAPS_TIMESERIES_CACHE: dict(
-                path=ZODBCacheMixin.default_cache_path(stem=f"{self._IRSWAPS_TIMESERIES_CACHE}_{cache_ds_id}_{self._curve}_{self._ql_interpolation_algo}"),
-            ),
-        }
-
     def _build_fwd_irswaps_timeseries(
         self,
         ql_curves_ts_dict: Dict[datetime, ql.DiscountCurve],
         queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
         n_jobs: Optional[int] = 1,
-        ignore_cache: Optional[False] = False 
+        ignore_cache: Optional[False] = False,
     ) -> pd.DataFrame:
         self._ensure_cache(self._IRSWAPS_TIMESERIES_CACHE)
 
@@ -513,7 +511,7 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
                 else:
                     tasks.append((cache_key, ref_date, ql_curve_nodes, query))
 
-        tasks_iter = tqdm.tqdm(tasks, desc="PRICING IRSWAPS...") if self._show_tqdm else tasks
+        tasks_iter = tqdm.tqdm(tasks, desc=self._DEFAULT_PRICING_MESSAGE) if self._show_tqdm else tasks
         new_results = Parallel(n_jobs=n_jobs, timeout=999999 if n_jobs != 1 else None)(
             delayed(_process_irswap_single_query_with_cache)(
                 cache_key,
@@ -561,7 +559,7 @@ class IRSwaps(BaseProductPlotter, ZODBCacheMixin):
             for u in underlying_tenors:
                 queries.append(IRSwapQuery(tenor=f"{fwd}x{u}", value=irswap_value))
 
-        irswaps_iter = tqdm.tqdm(ql_curves_ts_dict.items(), desc="PRICING IRSWAPS...") if self._show_tqdm else ql_curves_ts_dict.items()
+        irswaps_iter = tqdm.tqdm(ql_curves_ts_dict.items(), desc=self._DEFAULT_PRICING_MESSAGE) if self._show_tqdm else ql_curves_ts_dict.items()
         results: Dict[pd.Timestamp | datetime, pd.DataFrame] = Parallel(n_jobs=n_jobs)(
             delayed(_process_date_grid)(
                 curr_date,

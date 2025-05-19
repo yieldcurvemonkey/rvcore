@@ -167,6 +167,9 @@ class CMEFetcherV2(BaseFetcher):
                 curve_report_df.columns = [x.lower() if x != date_col else x for x in curve_report_df.columns]
 
                 try:
+                    if curve == "USD-FEDFUNDS" and curve_date.date() < datetime(2021, 6, 28).date():
+                        curve = "USD-OIS"
+
                     curve_report_df = curve_report_df[curve_report_df["curve name"] == curve]
                     if curve_report_df.empty:
                         ql_curves_dict[curve_date] = None
@@ -223,3 +226,5 @@ class CMEFetcherV2(BaseFetcher):
             ql_curves_dict[intraday_timestamp] = intraday_ql_discount_curve
 
         return ql_curves_dict
+
+

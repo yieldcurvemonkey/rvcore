@@ -1,14 +1,6 @@
-import os
-import re
-import threading
-from functools import wraps
-from pathlib import Path
-from typing import Any, Callable, Dict, MutableMapping, Optional, Tuple
+from typing import Any, Callable, MutableMapping
 
-import transaction
 from persistent.mapping import PersistentMapping
-from zc.lockfile import LockError
-from ZODB import DB, FileStorage
 
 EncodeFn = Callable[[Any], Any]
 DecodeFn = Callable[[Any], Any]

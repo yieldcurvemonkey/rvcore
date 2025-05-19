@@ -1,53 +1,52 @@
 import functools
 from datetime import datetime
+from functools import partial
+from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from core.utils.ql_loader import ql
 import tqdm
 from joblib import Parallel, delayed
 
+from core.Caching.ZODBCacheMixin import ZODBCacheMixin
 from core.CurveBuilding.IRSwaps.CME_IRSWAP_CURVE_QL_PARAMS import CME_IRSWAP_CURVE_QL_PARAMS
 from core.CurveBuilding.IRSwaps.ql_curve_building_utils import build_ql_discount_curve, get_nodes_dict
 from core.CurveBuilding.IRSwaptions.IRSwaptionCubeBuilder import IRSwaptionCubeBuilder, SCube
 from core.CurveBuilding.IRSwaptions.ql_cube_building_utils import build_ql_interpolated_vol_cube, df_to_cube_ts
+from core.DataFetching.GithubFetcher import GithubFetcher
 from core.IRSwaps import IRSwaps
 from core.Plotting.BaseProductPlotter import BaseProductPlotter
 from core.TimeseriesBuilding.IRSwaptions.IRSwaptionQuery import IRSwaptionQuery, IRSwaptionQueryWrapper
 from core.TimeseriesBuilding.IRSwaptions.IRSwaptionStructure import IRSwaptionStructure, IRSwaptionStructureFunctionMap
 from core.TimeseriesBuilding.IRSwaptions.IRSwaptionValue import IRSwaptionValue, IRSwaptionValueFunctionMap
+from core.utils.ql_loader import ql
 from core.utils.ql_utils import datetime_to_ql_date, get_bdates_between, ql_date_to_datetime, ql_period_to_months
 
 
-class IRSwaptions(BaseProductPlotter):
-    _data_source: Literal["GITHUB", "CSV_{path}"] = None
-    _irswaps_product: IRSwaps = None
-    _curve: str = None
-
-    _n_jobs: int = None
-    _show_tqdm: bool = None
-    _proxies: Dict[str, str] = None
-
+class IRSwaptions(BaseProductPlotter, ZODBCacheMixin):
     _EXPIRY_COL: str = "Expiry"
     _TAIL_COL: str = "Tail"
 
-    _irswaptions_hist_timeseries_csv_df: pd.DataFrame = None
-    _qlcube_cache: Dict[datetime, ql.InterpolatedSwaptionVolatilityCube] = None
-    _scube_cache: Dict[datetime, SCube] = None
-    _irswaption_queries_timeseries_cache: Dict[Tuple[datetime, Tuple[str, ...], Tuple[str, ...]], Dict[str, Union[datetime, float]]] = None
-
-    __data_sources_funcs: Dict = {}
-    _irswaption_hist_data_fetcher: Any = None
-
+    _DEFAULT_TZ = "US/Eastern"
+    _DEFAULT_DSF_KEY = "_DEFAULT_DSF_KEY"
+    _DEFAULT_DSF_OBJ = "_DEFAULT_DSF_OBJ"
+    _DEFAULT_DSF_OBJ_ARGS = "_DEFAULT_DSF_OBJ_ARGS"
+    _DEFAULT_DFS_FETCH_QLCUBES_FUNC = "_DEFAULT_DFS_FETCH_QLCUBES_FUNC"
+    _DEFAULT_DFS_FETCH_QLCUBES_FUNC_ARGS = "_DEFAULT_DFS_FETCH_QLCUBES_FUNC_ARGS"
+    _DEFAULT_DFS_FETCH_SCUBES_FUNC = "_DEFAULT_DFS_FETCH_SCUBES_FUNC"
+    _DEFAULT_DFS_FETCH_SCUBES_FUNC_ARGS = "_DEFAULT_DFS_FETCH_SCUBES_FUNC_ARGS"
     _DEFAULT_IRSWAPTION_PREFIX = "IRSWAPTION"
+    _DEFAULT_CSV_PREFIX = "CSV_"
+
     _IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_DATES = "_INPUT_DATES"
     _IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_QL_DISC_CURVES = "_INPUT_QL_DISC_CURVES"
     _DEFAULT_STRIKE_OFFSETS_BPS = [-200, -150, -125, -100, -75, -50, -25, -10, 0, 10, 25, 50, 75, 100, 125, 150, 200]
 
-    _DATA_SOURCE_UNFLAT_CUBE_CACHE: Dict[str, Annotated[Dict, "JSON"]] = {}
+    _IRSWAPTIONS_SCUBE_CACHE = "_irswaptions_scube_cache"
+    _IRSWAPTIONS_TIMESERIES_CACHE = "_irswaptions_timeseries_cache"
 
     def __init__(
         self,
@@ -63,27 +62,36 @@ class IRSwaptions(BaseProductPlotter):
         warning_verbose: Optional[bool] = False,
         error_verbose: Optional[bool] = False,
     ):
-        super().__init__(
-            debug_verbose=debug_verbose,
+        BaseProductPlotter.__init__(
+            self,
             info_verbose=info_verbose,
+            debug_verbose=debug_verbose,
             warning_verbose=warning_verbose,
             error_verbose=error_verbose,
         )
+        ZODBCacheMixin.__init__(self)
 
+        # in memory ql cube cache
         self._qlcube_cache = {}
-        self._scube_cache = {}
-        self._irswaption_queries_timeseries_cache = {}
 
         self._irswaps_product = irswaps_product
         self._curve = self._irswaps_product._curve
 
-        if "CSV_" in data_source:
-            # TODO partial csv reads
-            self._irswaptions_hist_timeseries_csv_df = pd.read_csv(data_source.split("_", 1)[-1]).set_index(date_col)
-            if self._curve in self._DATA_SOURCE_UNFLAT_CUBE_CACHE:
-                self._scube_cache = self._DATA_SOURCE_UNFLAT_CUBE_CACHE[self._curve]
-            else:
-                self._scube_cache = df_to_cube_ts(df_wide=self._irswaptions_hist_timeseries_csv_df)
+        if self._DEFAULT_CSV_PREFIX in data_source:
+            self._data_source = "CSV"  # for the cache
+
+            self._ensure_cache(self._IRSWAPTIONS_SCUBE_CACHE)
+            csv_path = data_source.split("_", 1)[-1]
+            df_wide = pd.read_csv(csv_path).set_index(date_col)
+            df_wide.index = pd.to_datetime(df_wide.index)
+
+            cached_dates = set(getattr(self, self._IRSWAPTIONS_SCUBE_CACHE).keys())
+            missing_mask = ~df_wide.index.isin(cached_dates)
+            if missing_mask.any():
+                getattr(self, self._IRSWAPTIONS_SCUBE_CACHE).update(df_to_cube_ts(df_wide.loc[missing_mask]))
+                self.zodb_commit()
+
+            self.close_zodb()
             self._data_source = "JSON"
         else:
             self._data_source = data_source
@@ -95,36 +103,88 @@ class IRSwaptions(BaseProductPlotter):
         self._proxies = proxies
 
         self.__data_sources_funcs = {
-            "HIST_IRSWAPTIONS": {
+            self._DEFAULT_DSF_KEY: {
                 "JSON": {
-                    "obj": IRSwaptionCubeBuilder,
-                    "init_args": (self._scube_cache, None, info_verbose, debug_verbose, warning_verbose, error_verbose),
-                    "fetch_qlcubes": "parallel_ql_vol_cube_builder",
-                    "fetch_qlcubes_args": (
+                    self._DEFAULT_DSF_OBJ: IRSwaptionCubeBuilder,
+                    self._DEFAULT_DSF_OBJ_ARGS: (
+                        getattr(self, self._IRSWAPTIONS_SCUBE_CACHE, None),
+                        None,
+                        info_verbose,
+                        debug_verbose,
+                        warning_verbose,
+                        error_verbose,
+                    ),
+                    self._DEFAULT_DFS_FETCH_QLCUBES_FUNC: "parallel_ql_vol_cube_builder",
+                    self._DEFAULT_DFS_FETCH_QLCUBES_FUNC_ARGS: (
                         self._curve,
                         self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_QL_DISC_CURVES,
-                        None,
-                        None,
-                        self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_DATES,
                         False,
                         self._precalibrate_cubes,
                         self._show_tqdm,
                         None,
                         self._n_jobs,
                     ),
-                    "fetch_scubes": "return_scube",
-                    "fetch_scubes_args": (
-                        self._curve,
-                        None,
-                        None,
+                    self._DEFAULT_DFS_FETCH_SCUBES_FUNC: "return_scube",
+                    self._DEFAULT_DFS_FETCH_SCUBES_FUNC_ARGS: (self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_DATES,),
+                },
+                "GITHUB_USD_MONKEY_CUBE": {
+                    self._DEFAULT_DSF_OBJ: GithubFetcher,
+                    self._DEFAULT_DSF_OBJ_ARGS: (
+                        self._irswaps_product._FETCHER_TIMEOUT,
+                        self._proxies,
+                        self._debug_verbose,
+                        self._info_verbose,
+                        self._warning_verbose,
+                        self._error_verbose,
+                    ),
+                    self._DEFAULT_DFS_FETCH_QLCUBES_FUNC: "fetch_USD_MONKEY_CUBE_ql_vol_cubes",
+                    self._DEFAULT_DFS_FETCH_QLCUBES_FUNC_ARGS: (
                         self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_DATES,
+                        self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_QL_DISC_CURVES,
+                        False,
+                        self._precalibrate_cubes,
+                        self._n_jobs,
+                        self._show_tqdm,
+                        self._irswaps_product._MAX_CONNECTIONS,
+                        self._irswaps_product._MAX_KEEPALIVE_CONNECTIONS,
+                        "yieldcurvemonkey/MONKEY_CUBE/refs/heads/main",
+                    ),
+                    self._DEFAULT_DFS_FETCH_SCUBES_FUNC: "fetch_USD_MONKEY_CUBE_dict_df",
+                    self._DEFAULT_DFS_FETCH_SCUBES_FUNC_ARGS: (
+                        self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_DATES,
+                        self._show_tqdm,
+                        self._irswaps_product._MAX_CONNECTIONS,
+                        self._irswaps_product._MAX_KEEPALIVE_CONNECTIONS,
+                        "yieldcurvemonkey/MONKEY_CUBE/refs/heads/main",
                     ),
                 },
             }
         }
-        self._irswaption_hist_data_fetcher = self.__data_sources_funcs["HIST_IRSWAPTIONS"][self._data_source]["obj"](
-            *self.__data_sources_funcs["HIST_IRSWAPTIONS"][self._data_source]["init_args"]
+        self._irswaption_hist_data_fetcher = self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DSF_OBJ](
+            *self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DSF_OBJ_ARGS]
         )
+
+    def _cache_config(self) -> dict[str, dict]:
+        cache_ds_id = self._data_source if not self._data_source.startswith("CSV_") else f"CSV_{Path(self._data_source.split('_', 1)[-1]).stem}"
+        return {
+            self._IRSWAPTIONS_SCUBE_CACHE: dict(
+                path=ZODBCacheMixin.default_cache_path(
+                    stem=f"{self._IRSWAPTIONS_SCUBE_CACHE}_{cache_ds_id}_{self._irswaps_product._curve}_{self._irswaps_product._ql_interpolation_algo}"
+                ),
+            ),
+            self._IRSWAPTIONS_TIMESERIES_CACHE: dict(
+                path=ZODBCacheMixin.default_cache_path(
+                    stem=f"{self._IRSWAPTIONS_TIMESERIES_CACHE}_{cache_ds_id}_{self._irswaps_product._curve}_{self._irswaps_product._ql_interpolation_algo}"
+                ),
+            ),
+        }
+
+    def _ensure_cache(self, attr: str, force_refresh: Optional[bool] = False):
+        if hasattr(self, attr):
+            delattr(self, attr)
+
+        cfg = self._cache_config()[attr]
+        self.zodb_open_cache(cache_attr=attr, force=force_refresh, **cfg)
 
     def fetch_qlcubes(
         self,
@@ -150,7 +210,9 @@ class IRSwaptions(BaseProductPlotter):
             bdates_not_cached = [d for d in input_bdates if d.date() not in cached_dates]
 
         if bdates_not_cached:
-            fetch = getattr(self._irswaption_hist_data_fetcher, self.__data_sources_funcs["HIST_IRSWAPTIONS"][self._data_source]["fetch_qlcubes"])
+            fetch = getattr(
+                self._irswaption_hist_data_fetcher, self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_QLCUBES_FUNC]
+            )
             args = tuple(
                 (
                     bdates_not_cached
@@ -161,7 +223,7 @@ class IRSwaptions(BaseProductPlotter):
                         else a
                     )
                 )
-                for a in self.__data_sources_funcs["HIST_IRSWAPTIONS"][self._data_source]["fetch_qlcubes_args"]
+                for a in self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_QLCUBES_FUNC_ARGS]
             )
             self._qlcube_cache |= fetch(*args)
 
@@ -189,47 +251,59 @@ class IRSwaptions(BaseProductPlotter):
         to_pydt: Optional[bool] = False,
         refresh_cache: Optional[bool] = False,
     ) -> Dict[datetime, SCube]:
-        assert (start_date and end_date) or bdates, "MUST PASS IN start/end dates OR explicit bdates"
+        try:
+            self._ensure_cache(self._IRSWAPTIONS_SCUBE_CACHE, refresh_cache)
+            assert (start_date and end_date) or bdates, "MUST PASS IN start/end dates OR explicit bdates"
+            input_bdates = get_bdates_between(start_date, end_date, self._irswaps_product._ql_calendar) if (start_date and end_date) else bdates
 
-        input_bdates = get_bdates_between(start_date, end_date, self._irswaps_product._ql_calendar) if (start_date and end_date) else bdates
-
-        cached_dates = {ts.date() for ts in self._scube_cache.keys()}
-        if refresh_cache:
-            bdates_not_cached = input_bdates
-        else:
-            bdates_not_cached = [d for d in input_bdates if d.date() not in cached_dates]
-
-        if bdates_not_cached:
-            fetch = getattr(self._irswaption_hist_data_fetcher, self.__data_sources_funcs["HIST_IRSWAPTIONS"][self._data_source]["fetch_scubes"])
-            args = tuple(
-                (bdates_not_cached if a == self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_DATES else a)
-                for a in self.__data_sources_funcs["HIST_IRSWAPTIONS"][self._data_source]["fetch_scubes_args"]
-            )
-            self._scube_cache |= fetch(*args)
-
-        ts_map = {ts.date(): ts for ts in self._scube_cache.keys()}
-        result: Dict[datetime, SCube] = {}
-
-        for bday in input_bdates:
-            ts = ts_map.get(bday.date())
-            if ts is None:
-                continue
-            scube = self._scube_cache[ts]
-
-            if to_pydt:
-                result[bday] = scube
+            cached_dates = {ts.date() for ts in getattr(self, self._IRSWAPTIONS_SCUBE_CACHE).keys()}
+            if refresh_cache:
+                bdates_not_cached = input_bdates
             else:
-                result[ts] = scube
+                bdates_not_cached = [d for d in input_bdates if d.date() not in cached_dates]
 
-        return result
+            if bdates_not_cached:
+                fetch = getattr(
+                    self._irswaption_hist_data_fetcher, self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_SCUBES_FUNC]
+                )
+                args = tuple(
+                    (self._irswaps_product.fetch_ql_irswap_curves(bdates=bdates_not_cached).keys() if a == self._IRSWAPTION_VOL_CUBE_FETCH_FUNC_INPUT_DATES else a)
+                    for a in self.__data_sources_funcs[self._DEFAULT_DSF_KEY][self._data_source][self._DEFAULT_DFS_FETCH_SCUBES_FUNC_ARGS]
+                )
+                getattr(self, self._IRSWAPTIONS_SCUBE_CACHE).update(fetch(*args))
+                self.zodb_commit()
+
+            ts_map = {ts.date(): ts for ts in getattr(self, self._IRSWAPTIONS_SCUBE_CACHE).keys()}
+            result: Dict[datetime, SCube] = {}
+
+            for bday in input_bdates:
+                ts = ts_map.get(bday.date())
+                if ts is None:
+                    continue
+                scube = getattr(self, self._IRSWAPTIONS_SCUBE_CACHE)[ts]
+
+                if to_pydt:
+                    result[bday] = scube
+                else:
+                    result[ts] = scube
+
+            self.close_zodb()
+            return result
+
+        except Exception as e:
+            self.close_zodb()
+            raise e
 
     def _build_irswaption_queries_timeseries(
         self,
         start_date: datetime,
         end_date: datetime,
         irswaption_queries: List[IRSwaptionQuery],
-        n_jobs: int | None = 1,
+        n_jobs: Optional[int] = 1,
+        ignore_cache: Optional[False] = False,
     ) -> pd.DataFrame:
+        self._ensure_cache(self._IRSWAPTIONS_TIMESERIES_CACHE)
+
         vol_cube_ts = self.fetch_scubes(start_date=start_date, end_date=end_date)
         ql_disc_curves = self._irswaps_product.fetch_ql_irswap_curves(start_date=start_date, end_date=end_date)
         dc_nodes = {d: get_nodes_dict(ql_curve) for d, ql_curve in ql_disc_curves.items()}
@@ -239,8 +313,8 @@ class IRSwaptions(BaseProductPlotter):
             for q in irswaption_queries:
                 q_key = _irswaption_query_key(q, self._curve)
                 ck = (ref_date, q_key)  # cache key
-                if ck in self._irswaption_queries_timeseries_cache:
-                    cached_rows.append(self._irswaption_queries_timeseries_cache[ck])
+                if ck in getattr(self, self._IRSWAPTIONS_TIMESERIES_CACHE) and not ignore_cache:
+                    cached_rows.append(getattr(self, self._IRSWAPTIONS_TIMESERIES_CACHE)[ck])
                 else:
                     tasks.append((ck, ref_date, vol_cube, dc_nodes[ref_date], q))
 
@@ -262,7 +336,9 @@ class IRSwaptions(BaseProductPlotter):
         )
 
         for (ck, _, _, _, _), (d, col, val) in zip(tasks, new_results):
-            self._irswaption_queries_timeseries_cache[ck] = (d, col, val)
+            getattr(self, self._IRSWAPTIONS_TIMESERIES_CACHE)[ck] = (d, col, val)
+        if new_results:
+            self.zodb_commit()
 
         all_rows = cached_rows + [(d, col, val) for d, col, val in new_results]
         if not all_rows:
@@ -275,6 +351,8 @@ class IRSwaptions(BaseProductPlotter):
             .sort_index()
         )
         df.columns.name = None
+
+        self.close_zodb()
         return df
 
     def timeseries_builder(
@@ -283,6 +361,7 @@ class IRSwaptions(BaseProductPlotter):
         end_date: datetime,
         queries: List[IRSwaptionQuery | IRSwaptionQueryWrapper],
         n_jobs: Optional[int] = None,
+        ignore_cache: Optional[False] = False,
     ) -> pd.DataFrame:
         flatten_queries: List[IRSwaptionQuery] = []
         expr_cols: List[Tuple[str, str]] = []
@@ -293,7 +372,9 @@ class IRSwaptions(BaseProductPlotter):
                 ignore_risk_weight = q.ignore_risk_weights
             flatten_queries += q.return_query()
 
-        nvol_ts_df = self._build_irswaption_queries_timeseries(start_date=start_date, end_date=end_date, irswaption_queries=flatten_queries, n_jobs=n_jobs)
+        nvol_ts_df = self._build_irswaption_queries_timeseries(
+            start_date=start_date, end_date=end_date, irswaption_queries=flatten_queries, n_jobs=n_jobs, ignore_cache=ignore_cache
+        )
 
         cols_to_return = []
         for q in flatten_queries:
@@ -320,7 +401,7 @@ class IRSwaptions(BaseProductPlotter):
         assert strike_offset is not None or expiry or tail, "MUST PASS IN A 'strike_offset', 'expiry', or 'tail'"
 
         if strike_offset is not None:
-            scube: SCube = self.fetch_scubes(start_date=date, end_date=date, to_pydt=True)[date]
+            scube: SCube = self.fetch_scubes(bdates=[date], to_pydt=True)[date]
             if not strike_offset in scube:
                 raise ValueError(f"Strike offset: {strike_offset} not in {date.date()}'s cube")
 
@@ -346,7 +427,7 @@ class IRSwaptions(BaseProductPlotter):
                 return vol_grid_df
 
         elif expiry:
-            vol_cube_dict_df = self.fetch_scubes(start_date=date, end_date=date, to_pydt=True)[date]
+            vol_cube_dict_df = self.fetch_scubes(bdates=[date], to_pydt=True)[date]
             tail_strike_surface = []
             for curr_strike_offset, expiry_tail_grid_df in vol_cube_dict_df.items():
                 tail_strike_surface.append({"Strike": curr_strike_offset} | expiry_tail_grid_df.loc[expiry].to_dict())
